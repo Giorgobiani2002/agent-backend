@@ -1,0 +1,82 @@
+import "dotenv/config";
+import express, { NextFunction, Request, Response } from "express";
+import testRouter from "./routes/test";
+import dbRouter from "./routes/db";
+import booksRouter from "./routes/books";
+import chatRouter from "./routes/chat";
+import trainRouter from "./routes/train";
+import agentRouter, { startStalledScanner, spawnBulkWorker } from "./routes/agent";
+import playbooksRouter from "./routes/playbooks";
+import schedulesRouter from "./routes/schedules";
+import alertsRouter from "./routes/alerts";
+import { startScheduler } from "./services/scheduler";
+import { initializePgVector } from "./db";
+import { tenantMiddleware } from "./utils/http";
+
+const app = express();
+const PORT = process.env.PORT ?? 3001;
+
+const corsOrigins = (process.env.CORS_ORIGIN ?? "http://localhost:3000")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+function isDevLocalhostOrigin(origin: string): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+}
+
+function corsMiddleware(req: Request, res: Response, next: NextFunction) {
+  const origin = req.headers.origin;
+  if (typeof origin === "string") {
+    const allowed =
+      corsOrigins.includes(origin) ||
+      (process.env.NODE_ENV !== "production" && isDevLocalhostOrigin(origin));
+    if (allowed) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    }
+  }
+
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS,PUT,PATCH");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+
+  next();
+}
+
+app.use(corsMiddleware);
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT ?? "25mb" }));
+
+// /test and /db are diagnostics — left unscoped on purpose.
+app.use("/test", testRouter);
+app.use("/db", dbRouter);
+
+// Everything else is per-company and must come through the rs-client proxy.
+app.use("/books", tenantMiddleware, booksRouter);
+app.use("/chat", tenantMiddleware, chatRouter);
+app.use("/train", tenantMiddleware, trainRouter);
+app.use("/agent", tenantMiddleware, agentRouter);
+app.use("/playbooks", tenantMiddleware, playbooksRouter);
+app.use("/schedules", tenantMiddleware, schedulesRouter);
+app.use("/alerts", tenantMiddleware, alertsRouter);
+
+if (require.main === module) {
+  initializePgVector()
+    .then(() => {
+      startStalledScanner();
+      startScheduler({ spawnBulkWorker });
+      app.listen(PORT, () => {
+        console.log(`Backend running on http://localhost:${PORT}`);
+      });
+    })
+    .catch((error) => {
+      console.error("Failed to initialize PostgreSQL/pgvector connection", error);
+      process.exit(1);
+    });
+}
+
+export { app };
