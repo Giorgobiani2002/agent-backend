@@ -1489,12 +1489,79 @@ const DEFAULT_BULK_CONCURRENCY = Math.max(
   Math.min(8, Number(process.env.BULK_WORKER_CONCURRENCY ?? 1)),
 );
 
+/**
+ * Dispatch N worker processes for a bulk run.
+ *
+ * Two modes, picked at runtime based on `AGENT_RUNTIME_URL`:
+ *
+ *   1. **HTTP dispatch** (production / Railway): POST to the agent-runtime
+ *      service which spawns the Python subprocesses inside its own
+ *      Chromium-equipped container. We return [] because there are no
+ *      local processes to track — agent-backend already tracks
+ *      lifecycle via bulk_run_rows + recordHeartbeat.
+ *   2. **Local spawn** (dev / no AGENT_RUNTIME_URL): the legacy path that
+ *      spawns `python main.py --bulk-run-id X` in the same process tree.
+ *      Used when AGENT_RUNTIME_URL is unset (typical dev box with Python
+ *      installed alongside agent-backend).
+ */
 export function spawnBulkWorker(
   runId: string,
   companyId: string,
   concurrency?: number,
 ): ChildProcess[] {
   const n = Math.max(1, Math.min(8, concurrency ?? DEFAULT_BULK_CONCURRENCY));
+  const runtimeUrl = process.env.AGENT_RUNTIME_URL?.replace(/\/$/, "");
+
+  if (runtimeUrl) {
+    // Fire-and-forget HTTP dispatch. The agent-runtime returns 202
+    // immediately after spawning local subprocesses — we don't await
+    // a per-row result here (those flow back via the bulk-row HTTP
+    // callbacks the workers make to /agent/bulk-runs/:id/rows/:i/result).
+    const body = JSON.stringify({
+      bulk_run_id: runId,
+      company_id: companyId,
+      concurrency: n,
+    });
+    fetch(`${runtimeUrl}/run`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Secret": process.env.AI_INTERNAL_SECRET ?? "",
+      },
+      body,
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          console.error(
+            `[bulk ${runId.slice(0, 8)}] agent-runtime ${res.status}: ${text.slice(0, 200)}`,
+          );
+          await markRunFinished(
+            runId,
+            "failed",
+            `agent-runtime dispatch failed: HTTP ${res.status}`,
+          ).catch(() => undefined);
+        } else {
+          console.log(
+            `[bulk ${runId.slice(0, 8)}] dispatched ${n} worker(s) to agent-runtime`,
+          );
+        }
+      })
+      .catch(async (err) => {
+        console.error(
+          `[bulk ${runId.slice(0, 8)}] agent-runtime dispatch error:`,
+          err instanceof Error ? err.message : err,
+        );
+        await markRunFinished(
+          runId,
+          "failed",
+          `agent-runtime unreachable: ${err instanceof Error ? err.message : err}`,
+        ).catch(() => undefined);
+      });
+    return [];
+  }
+
+  // Local spawn (dev path).
   // Headless is forced when more than 1 worker — 4 visible Chromiums would
   // overwhelm the screen and starve focus from each other.
   const headless = n > 1 ? "true" : (process.env.AGENT_HEADLESS ?? "false");
