@@ -2,10 +2,12 @@ import { sendConversationMessage } from "./chat";
 import { GeminiService } from "./gemini";
 import * as chatRepository from "../repositories/chat";
 import * as booksRepository from "../repositories/books";
+import * as rateLimit from "./chat-rate-limit";
 import { TEST_COMPANY_ID } from "../test-utils";
 
 jest.mock("../repositories/chat");
 jest.mock("../repositories/books");
+jest.mock("./chat-rate-limit");
 
 describe("chat service", () => {
   const gemini: GeminiService = {
@@ -25,6 +27,7 @@ describe("chat service", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.mocked(rateLimit.checkAndBumpChatLimit).mockResolvedValue({ count: 1, limit: 60 });
     jest.mocked(chatRepository.getConversation).mockResolvedValue({
       id: "conversation-1",
       user_id: "user-1",

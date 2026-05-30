@@ -1,4 +1,6 @@
 import "dotenv/config";
+import { initSentry, Sentry } from "./sentry";
+initSentry(); // must run before any other module that might throw
 import express, { NextFunction, Request, Response } from "express";
 import testRouter from "./routes/test";
 import dbRouter from "./routes/db";
@@ -63,6 +65,29 @@ app.use("/agent", tenantMiddleware, agentRouter);
 app.use("/playbooks", tenantMiddleware, playbooksRouter);
 app.use("/schedules", tenantMiddleware, schedulesRouter);
 app.use("/alerts", tenantMiddleware, alertsRouter);
+
+// Catch-all error handler — captures anything routes throw without
+// their own try/catch and ships it to Sentry with tenant context.
+// Must be the LAST middleware so it sees all errors. Defined inline
+// so we don't accidentally double-register on test reloads.
+app.use(
+  (err: Error & { status?: number }, req: Request, res: Response, _next: NextFunction) => {
+    const status = typeof err.status === "number" ? err.status : 500;
+    if (status >= 500) {
+      Sentry.withScope((scope) => {
+        if (req.companyId) scope.setTag("company_id", req.companyId);
+        if (req.userId) scope.setUser({ id: req.userId });
+        scope.setTag("route", req.path);
+        Sentry.captureException(err);
+      });
+      console.error("[unhandled]", req.method, req.path, err);
+    }
+    res.status(status).json({
+      success: false,
+      message: err.message || "Internal error",
+    });
+  },
+);
 
 if (require.main === module) {
   initializePgVector()

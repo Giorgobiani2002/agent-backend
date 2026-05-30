@@ -23,6 +23,7 @@ import {
   looksLikeDiagnosticQuery,
   toolDeclarations,
 } from "./chat-tools";
+import { checkAndBumpChatLimit } from "./chat-rate-limit";
 
 interface DocumentContext {
   bookId: string;
@@ -507,6 +508,11 @@ export async function sendConversationMessage(
   if (!conversation) {
     throw new HttpError(404, "Conversation not found");
   }
+
+  // Per-company per-hour rate limit. Throws 429 when over cap; the
+  // bump itself IS the check, so two concurrent requests can't race
+  // past the limit. Set CHAT_MAX_MSGS_PER_HOUR=0 to disable.
+  await checkAndBumpChatLimit(input.companyId);
 
   const history = await getRecentMessages(input.conversationId);
   const diagnosticMode = looksLikeDiagnosticQuery(content);
