@@ -2091,6 +2091,50 @@ router.post("/bulk-runs/:id/finalize", async (req: Request, res: Response) => {
     await markRunFinished(runId, outcome, req.body?.error ?? null);
     workerRegistry.delete(runId);
 
+    // Phase B e2e: if the run was dispatched from a declaration
+    // submit, post the result back to rs-server so the UI flips
+    // from "Submitting…" to "Submitted" / "Failed" without polling.
+    // Best-effort — failures here are logged but don't fail finalize.
+    const config = data.run.config as Record<string, unknown> | null;
+    if (config?.source === "declaration" && typeof config.source_declaration_id === "string") {
+      const declarationId = config.source_declaration_id;
+      const row = data.rows[0];
+      // The worker stuffs the receipt into review_payload.receipt or
+      // the final action's value when the playbook completes — we
+      // peek at both. If neither is set, status flips but receipt
+      // stays null and the user follows up manually.
+      const reviewPayload = (row?.review_payload ?? {}) as Record<string, unknown>;
+      const receipt =
+        typeof reviewPayload.receipt === "string"
+          ? reviewPayload.receipt
+          : typeof reviewPayload.declaration_number === "string"
+            ? reviewPayload.declaration_number
+            : null;
+      try {
+        const { rsServerClient } = await import("../services/rs-server-client");
+        await rsServerClient.post(
+          `/internal/tools/declarations/${encodeURIComponent(declarationId)}/result`,
+          {
+            companyId: run.company_id,
+            body: {
+              status: outcome === "succeeded" ? "submitted" : "failed",
+              receipt,
+              bulk_run_id: runId,
+              error: outcome === "failed" ? (row?.error ?? "playbook failed") : null,
+            },
+          },
+        );
+        console.log(
+          `[declaration callback] declaration=${declarationId} status=${outcome === "succeeded" ? "submitted" : "failed"}`,
+        );
+      } catch (err) {
+        console.warn(
+          `[declaration callback] failed to notify rs-server for declaration=${declarationId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
     // Out-of-band completion ping (Telegram). No-op if not configured.
     void notifyBulkRunComplete({
       runId,

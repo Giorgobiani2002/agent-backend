@@ -11,6 +11,7 @@ import agentRouter, { startStalledScanner, spawnBulkWorker } from "./routes/agen
 import playbooksRouter from "./routes/playbooks";
 import schedulesRouter from "./routes/schedules";
 import alertsRouter from "./routes/alerts";
+import internalRouter from "./routes/internal";
 import { startScheduler } from "./services/scheduler";
 import { initializePgVector } from "./db";
 import { tenantMiddleware } from "./utils/http";
@@ -65,6 +66,10 @@ app.use("/agent", tenantMiddleware, agentRouter);
 app.use("/playbooks", tenantMiddleware, playbooksRouter);
 app.use("/schedules", tenantMiddleware, schedulesRouter);
 app.use("/alerts", tenantMiddleware, alertsRouter);
+// /internal — rs-server's outbound calls (dispatch declaration, etc).
+// tenantMiddleware enforces X-Internal-Secret + X-Company-Id which is
+// exactly what we want for service-to-service auth.
+app.use("/internal", tenantMiddleware, internalRouter);
 
 // Catch-all error handler — captures anything routes throw without
 // their own try/catch and ships it to Sentry with tenant context.
