@@ -39,7 +39,19 @@ declare global {
 export function tenantMiddleware(req: Request, res: Response, next: NextFunction): void {
   const expectedSecret = process.env.AI_INTERNAL_SECRET ?? "";
 
-  if (expectedSecret && req.headers["x-internal-secret"] !== expectedSecret) {
+  // Fail CLOSED. An empty secret is a misconfiguration, not "auth disabled".
+  // The old `if (expectedSecret && ...)` silently let every request through
+  // when the env var was dropped — a one-typo path to full cross-tenant
+  // access. Refuse all traffic until the secret is configured.
+  if (!expectedSecret) {
+    res.status(503).json({
+      success: false,
+      message: "Service unavailable: AI_INTERNAL_SECRET is not configured",
+    });
+    return;
+  }
+
+  if (req.headers["x-internal-secret"] !== expectedSecret) {
     res.status(403).json({ success: false, message: "Internal secret mismatch" });
     return;
   }

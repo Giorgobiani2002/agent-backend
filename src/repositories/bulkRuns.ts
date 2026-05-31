@@ -108,6 +108,29 @@ export async function findBulkRun(
 }
 
 /**
+ * Idempotency lookup for declaration dispatch: is there already a
+ * non-terminal bulk run for this declaration? Prevents a second
+ * /dispatch-declaration (e.g. an rs-server → agent-backend retry)
+ * from spawning a duplicate browser submission of the same VAT
+ * declaration.
+ */
+export async function findActiveBulkRunForDeclaration(
+  companyId: string,
+  declarationId: string,
+): Promise<BulkRun | null> {
+  const res = await query<BulkRun>(
+    `SELECT * FROM bulk_runs
+       WHERE company_id = $1
+         AND config->>'source_declaration_id' = $2
+         AND status IN ('pending', 'running')
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    [companyId, declarationId],
+  );
+  return res.rows[0] ?? null;
+}
+
+/**
  * Internal lookup that does NOT enforce tenant scoping — only used by the
  * scheduler / stalled-scanner / bulk worker, all of which are server-side
  * jobs that already trust the row id (it came from claim*). Never call from

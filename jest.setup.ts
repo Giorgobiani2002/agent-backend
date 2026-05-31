@@ -1,14 +1,9 @@
-// Clear AI_INTERNAL_SECRET before tests run.
+// Pin a known AI_INTERNAL_SECRET for tests.
 //
-// Importing `app` from `src/index.ts` triggers `dotenv/config`, which loads
-// the real .env (where we set a real secret for the boot test). The
-// tenantMiddleware enforces the secret when it's set, so tests would fail
-// with HTTP 403 unless every withTenant() call also sent the secret header.
-//
-// We strip it here so the tests' existing `X-Company-Id` / `X-User-Id`
-// headers are sufficient — matching the behaviour before the secret was
-// added to .env. The withAdmin / withTenant helpers in src/test-utils.ts
-// already set the company + admin headers; this just removes the secret
-// requirement.
+// tenantMiddleware now FAILS CLOSED — an empty secret returns 503 (a
+// dropped env var must never silently disable auth). So tests run with a
+// configured secret and the withTenant / withAdmin helpers in
+// src/test-utils.ts send the matching X-Internal-Secret header, exercising
+// the same auth path as production.
 
-process.env.AI_INTERNAL_SECRET = "";
+process.env.AI_INTERNAL_SECRET = "test-internal-secret";

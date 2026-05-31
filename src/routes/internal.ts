@@ -1,7 +1,11 @@
 import { Router, Request, Response } from "express";
 import { HttpError } from "../errors";
 import { findPlaybookByKey } from "../repositories/playbooks";
-import { createBulkRun, markRunStarted } from "../repositories/bulkRuns";
+import {
+  createBulkRun,
+  findActiveBulkRunForDeclaration,
+  markRunStarted,
+} from "../repositories/bulkRuns";
 import { spawnBulkWorker } from "./agent";
 import { sendError } from "../utils/http";
 import { config } from "../config";
@@ -47,6 +51,22 @@ router.post("/dispatch-declaration", async (req: Request, res: Response) => {
       body.data && typeof body.data === "object" && !Array.isArray(body.data)
         ? body.data
         : {};
+
+    // Idempotency: if a non-terminal run already exists for this
+    // declaration, return it instead of spawning a duplicate browser
+    // submission (defends against an rs-server → agent-backend retry).
+    const existingRun = await findActiveBulkRunForDeclaration(
+      req.companyId,
+      body.declaration_id,
+    );
+    if (existingRun) {
+      res.status(202).json({
+        success: true,
+        bulk_run_id: existingRun.id,
+        idempotent: true,
+      });
+      return;
+    }
 
     const playbook = await findPlaybookByKey(req.companyId, "GE", playbookKey);
 

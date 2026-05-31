@@ -118,9 +118,18 @@ describe("chat routes", () => {
     expect(response.body.message).toBe("content is required");
   });
 
-  it("rejects requests with no tenant header", async () => {
+  it("rejects requests with no internal secret", async () => {
+    // Fail-closed: a request without the internal secret is forbidden.
     const response = await request(app)
       .post("/chat/conversations")
+      .send({ userId: "user-1" });
+    expect(response.status).toBe(403);
+  });
+
+  it("rejects authenticated requests missing the company header", async () => {
+    const response = await request(app)
+      .post("/chat/conversations")
+      .set("X-Internal-Secret", "test-internal-secret")
       .send({ userId: "user-1" });
     expect(response.status).toBe(400);
     expect(response.body.message).toContain("X-Company-Id");
