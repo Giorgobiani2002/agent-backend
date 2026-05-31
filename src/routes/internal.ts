@@ -4,6 +4,7 @@ import { findPlaybookByKey } from "../repositories/playbooks";
 import { createBulkRun, markRunStarted } from "../repositories/bulkRuns";
 import { spawnBulkWorker } from "./agent";
 import { sendError } from "../utils/http";
+import { config } from "../config";
 
 /**
  * Internal API surface that rs-server calls into. Today's only caller
@@ -48,11 +49,79 @@ router.post("/dispatch-declaration", async (req: Request, res: Response) => {
         : {};
 
     const playbook = await findPlaybookByKey(req.companyId, "GE", playbookKey);
+
+    // ── Autonomous fallback (free mode) ──────────────────────────────
+    // When no playbook is registered, optionally dispatch the same
+    // task to agent-runtime's /run-task endpoint. browser-use will
+    // drive Chromium step-by-step from the synthesized natural-
+    // language task. Slower and pricier than a recorded playbook,
+    // but works on day one without any user setup.
+    //
+    // Off by default (security: AI clicks around in tenant's rs.ge
+    // account). Flip ALLOW_AUTONOMOUS_DISPATCH=true on agent-backend
+    // to enable.
+    if (!playbook && process.env.ALLOW_AUTONOMOUS_DISPATCH === "true") {
+      const taskPrompt = buildAutonomousTaskPrompt(playbookKey, data);
+      const runtimeUrl = process.env.AGENT_RUNTIME_URL?.replace(/\/$/, "");
+      if (!runtimeUrl) {
+        throw new HttpError(
+          500,
+          "ALLOW_AUTONOMOUS_DISPATCH is on but AGENT_RUNTIME_URL is not set",
+        );
+      }
+      const correlationId = `auto-${body.declaration_id}-${Date.now()}`;
+      let runtimeResp: globalThis.Response;
+      try {
+        runtimeResp = await fetch(`${runtimeUrl}/run-task`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-Secret": config.aiInternalSecret,
+          },
+          body: JSON.stringify({
+            task: taskPrompt,
+            data,
+            company_id: req.companyId,
+            correlation_id: correlationId,
+            max_steps: Number(process.env.AUTONOMOUS_MAX_STEPS ?? 80),
+            safety_mode: "halt-on-dangerous",
+          }),
+        });
+      } catch (err) {
+        throw new HttpError(
+          502,
+          `Autonomous dispatch to agent-runtime failed: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+      if (runtimeResp.status !== 202) {
+        const errText = await runtimeResp.text().catch(() => "");
+        throw new HttpError(
+          502,
+          `agent-runtime /run-task returned ${runtimeResp.status}: ${errText.slice(0, 200)}`,
+        );
+      }
+      // No bulk_run tracking for autonomous mode (the worker doesn't
+      // claim from bulk_run_rows). We return the correlation_id as
+      // bulk_run_id so rs-server stores it on playbook_run_id — UI
+      // shows "Submitted via autonomous AI" with this id for audit.
+      // TODO: wire a /agent/task-callback/:correlationId endpoint so
+      // status flips automatically when the worker finishes.
+      res.status(202).json({
+        success: true,
+        bulk_run_id: correlationId,
+        playbook_id: null,
+        mode: "autonomous",
+      });
+      return;
+    }
+
     if (!playbook) {
       throw new HttpError(
         404,
         `No playbook with key="${playbookKey}" registered for this company. ` +
-          `Record one via /dashboard/ai/playbooks and tag it with this key.`,
+          `Record one via /dashboard/ai/playbooks and tag it with this key. ` +
+          `(Or enable ALLOW_AUTONOMOUS_DISPATCH=true to let the AI agent ` +
+          `figure it out without a playbook — slower and pricier.)`,
       );
     }
     if (
@@ -118,5 +187,51 @@ router.post("/dispatch-declaration", async (req: Request, res: Response) => {
     sendError(res, error);
   }
 });
+
+/**
+ * Build a natural-language task prompt for browser-use's autonomous
+ * (free) mode, given the playbook key + data the playbook would have
+ * received. The prompt has to be specific enough that a generalist
+ * LLM can navigate rs.ge without prior context — concrete URL, exact
+ * form name (Form 200.00), and the numeric values to enter.
+ *
+ * Per playbook key we emit a different prompt. Only the VAT
+ * declaration is wired today; add more cases as the playbook
+ * library grows.
+ */
+function buildAutonomousTaskPrompt(
+  playbookKey: string,
+  data: Record<string, unknown>,
+): string {
+  if (playbookKey === "rs.ge.vat-declaration") {
+    const year = data.period_year ?? "?";
+    const month = data.period_month ?? "?";
+    const outputVat = data.output_vat ?? 0;
+    const inputVat = data.input_vat ?? 0;
+    const netVat = data.net_vat ?? 0;
+    const sales = data.taxable_sales_total ?? 0;
+    const purchases = data.taxable_purchases_total ?? 0;
+    return [
+      "Open https://eservices.rs.ge in a fresh browser.",
+      "Log in with the credentials available in the browser profile (already saved).",
+      "Navigate to the VAT declaration section (დღგ — დეკლარაცია).",
+      `Open a new VAT declaration (Form 200.00) for period ${year}-${String(month).padStart(2, "0")} (Year ${year}, Month ${month}).`,
+      "Fill in the declaration using the following values (all amounts in GEL):",
+      `  - Taxable sales (output base): ${sales}`,
+      `  - VAT collected on sales (output VAT): ${outputVat}`,
+      `  - Deductible purchases (input base): ${purchases}`,
+      `  - Deductible VAT on purchases (input VAT): ${inputVat}`,
+      `  - Net VAT payable: ${netVat}`,
+      "Review the numbers match the form fields. If a field is auto-calculated by rs.ge and differs from these by more than 0.05 GEL, stop and report the mismatch.",
+      "Click Save → then Submit (გაგზავნა / წარდგენა).",
+      "Wait for the confirmation page. Copy the receipt number / declaration number.",
+      "Return the receipt number in the form `receipt=<number>` as the last line of your output.",
+    ].join("\n");
+  }
+  // Generic fallback — the playbook key tells us nothing specific.
+  return `Execute the rs.ge flow identified as "${playbookKey}" using this data: ${JSON.stringify(
+    data,
+  )}. Log into rs.ge, find the relevant form, fill it, and submit. Return any receipt number on the last line as receipt=<number>.`;
+}
 
 export default router;
