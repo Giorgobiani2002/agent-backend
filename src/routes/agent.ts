@@ -2083,19 +2083,28 @@ router.post("/bulk-runs/:id/heartbeat", async (req: Request, res: Response) => {
 router.post("/task-callback", async (req: Request, res: Response) => {
   try {
     const body = (req.body ?? {}) as {
-      declaration_id?: string;
+      source_id?: string;
+      result_path?: string;
+      declaration_id?: string; // legacy alias
       status?: "submitted" | "failed";
       receipt?: string | null;
       error?: string | null;
     };
-    if (!body.declaration_id || typeof body.declaration_id !== "string") {
-      throw new HttpError(400, "declaration_id is required");
+    const sourceId = body.source_id || body.declaration_id;
+    const resultPath =
+      body.result_path ||
+      (body.declaration_id ? "/internal/tools/declarations" : "");
+    if (!sourceId || typeof sourceId !== "string") {
+      throw new HttpError(400, "source_id (or declaration_id) is required");
+    }
+    if (!resultPath) {
+      throw new HttpError(400, "result_path is required");
     }
     const status = body.status === "submitted" ? "submitted" : "failed";
 
     const { rsServerClient } = await import("../services/rs-server-client");
     await rsServerClient.post(
-      `/internal/tools/declarations/${encodeURIComponent(body.declaration_id)}/result`,
+      `${resultPath}/${encodeURIComponent(sourceId)}/result`,
       {
         companyId: req.companyId,
         body: {
@@ -2129,18 +2138,26 @@ router.post("/bulk-runs/:id/finalize", async (req: Request, res: Response) => {
     await markRunFinished(runId, outcome, req.body?.error ?? null);
     workerRegistry.delete(runId);
 
-    // Phase B e2e: if the run was dispatched from a declaration
-    // submit, post the result back to rs-server so the UI flips
-    // from "Submitting…" to "Submitted" / "Failed" without polling.
-    // Best-effort — failures here are logged but don't fail finalize.
+    // If the run was dispatched from a submission (VAT declaration,
+    // payroll run, …), post the result back to the rs-server endpoint
+    // the dispatcher named in config.result_path so the UI flips from
+    // "Submitting…" to "Submitted"/"Failed" without polling. Generic
+    // over source type. Best-effort — logged, never fails finalize.
     const config = data.run.config as Record<string, unknown> | null;
-    if (config?.source === "declaration" && typeof config.source_declaration_id === "string") {
-      const declarationId = config.source_declaration_id;
+    const sourceId =
+      typeof config?.source_id === "string"
+        ? config.source_id
+        : typeof config?.source_declaration_id === "string"
+          ? config.source_declaration_id
+          : null;
+    const resultPath =
+      typeof config?.result_path === "string"
+        ? config.result_path
+        : config?.source === "declaration"
+          ? "/internal/tools/declarations"
+          : null;
+    if (sourceId && resultPath) {
       const row = data.rows[0];
-      // The worker stuffs the receipt into review_payload.receipt or
-      // the final action's value when the playbook completes — we
-      // peek at both. If neither is set, status flips but receipt
-      // stays null and the user follows up manually.
       const reviewPayload = (row?.review_payload ?? {}) as Record<string, unknown>;
       const receipt =
         typeof reviewPayload.receipt === "string"
@@ -2151,7 +2168,7 @@ router.post("/bulk-runs/:id/finalize", async (req: Request, res: Response) => {
       try {
         const { rsServerClient } = await import("../services/rs-server-client");
         await rsServerClient.post(
-          `/internal/tools/declarations/${encodeURIComponent(declarationId)}/result`,
+          `${resultPath}/${encodeURIComponent(sourceId)}/result`,
           {
             companyId: run.company_id,
             body: {
@@ -2163,11 +2180,11 @@ router.post("/bulk-runs/:id/finalize", async (req: Request, res: Response) => {
           },
         );
         console.log(
-          `[declaration callback] declaration=${declarationId} status=${outcome === "succeeded" ? "submitted" : "failed"}`,
+          `[submission callback] ${config?.source ?? "?"}=${sourceId} status=${outcome === "succeeded" ? "submitted" : "failed"}`,
         );
       } catch (err) {
         console.warn(
-          `[declaration callback] failed to notify rs-server for declaration=${declarationId}:`,
+          `[submission callback] failed to notify rs-server for ${sourceId}:`,
           err instanceof Error ? err.message : err,
         );
       }

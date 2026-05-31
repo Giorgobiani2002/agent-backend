@@ -39,12 +39,28 @@ const router = Router();
 router.post("/dispatch-declaration", async (req: Request, res: Response) => {
   try {
     const body = (req.body ?? {}) as {
+      // Generic submission dispatch. source_type + source_id identify
+      // what's being filed (declaration | payroll | future income/profit
+      // tax); result_path is the rs-server internal base path the
+      // finalize hook posts the outcome to. declaration_id is kept as a
+      // backward-compatible alias for the original VAT flow.
+      source_type?: string;
+      source_id?: string;
+      result_path?: string;
       declaration_id?: string;
       playbook_key?: string;
       data?: Record<string, unknown>;
     };
-    if (!body.declaration_id || typeof body.declaration_id !== "string") {
-      throw new HttpError(400, "declaration_id is required");
+    const sourceType = body.source_type || "declaration";
+    const sourceId = body.source_id || body.declaration_id;
+    const resultPath =
+      body.result_path ||
+      (sourceType === "declaration" ? "/internal/tools/declarations" : "");
+    if (!sourceId || typeof sourceId !== "string") {
+      throw new HttpError(400, "source_id (or declaration_id) is required");
+    }
+    if (!resultPath) {
+      throw new HttpError(400, "result_path is required for non-declaration sources");
     }
     const playbookKey = body.playbook_key || "rs.ge.vat-declaration";
     const data =
@@ -52,12 +68,12 @@ router.post("/dispatch-declaration", async (req: Request, res: Response) => {
         ? body.data
         : {};
 
-    // Idempotency: if a non-terminal run already exists for this
-    // declaration, return it instead of spawning a duplicate browser
-    // submission (defends against an rs-server → agent-backend retry).
+    // Idempotency: if a non-terminal run already exists for this source,
+    // return it instead of spawning a duplicate browser submission
+    // (defends against an rs-server → agent-backend retry).
     const existingRun = await findActiveBulkRunForDeclaration(
       req.companyId,
-      body.declaration_id,
+      sourceId,
     );
     if (existingRun) {
       res.status(202).json({
@@ -89,7 +105,15 @@ router.post("/dispatch-declaration", async (req: Request, res: Response) => {
           "ALLOW_AUTONOMOUS_DISPATCH is on but AGENT_RUNTIME_URL is not set",
         );
       }
-      const correlationId = `auto-${body.declaration_id}-${Date.now()}`;
+      const correlationId = `auto-${sourceId}-${Date.now()}`;
+      // Hand the worker enough to post its result back to the right
+      // place: source id/type + the rs-server result path.
+      const taskData = {
+        ...data,
+        source_id: sourceId,
+        source_type: sourceType,
+        result_path: resultPath,
+      };
       let runtimeResp: globalThis.Response;
       try {
         runtimeResp = await fetch(`${runtimeUrl}/run-task`, {
@@ -100,7 +124,7 @@ router.post("/dispatch-declaration", async (req: Request, res: Response) => {
           },
           body: JSON.stringify({
             task: taskPrompt,
-            data,
+            data: taskData,
             company_id: req.companyId,
             correlation_id: correlationId,
             max_steps: Number(process.env.AUTONOMOUS_MAX_STEPS ?? 80),
@@ -162,7 +186,8 @@ router.post("/dispatch-declaration", async (req: Request, res: Response) => {
         data: {
           merged: data,
           raw: {
-            declaration_id: body.declaration_id,
+            source_id: sourceId,
+            source_type: sourceType,
             dispatched_at: new Date().toISOString(),
           },
         },
@@ -181,12 +206,15 @@ router.post("/dispatch-declaration", async (req: Request, res: Response) => {
       sessionKey: "main_user",
       maxSteps: null,
       record: true,
-      task: `Submit VAT declaration ${body.declaration_id}`,
+      task: `Submit ${sourceType} ${sourceId}`,
       stopOnFailure: true,
-      // Tags that the finalize hook uses to route the result back to
-      // rs-server's /internal/declarations/:id/result endpoint.
-      source: "declaration" as const,
-      source_declaration_id: body.declaration_id,
+      // Tags the finalize hook uses to POST the outcome back to the
+      // right rs-server endpoint: `${result_path}/${source_id}/result`.
+      source: sourceType,
+      source_id: sourceId,
+      result_path: resultPath,
+      // Kept for backward-compat with any in-flight VAT runs.
+      source_declaration_id: sourceType === "declaration" ? sourceId : undefined,
       playbookName: playbook.name,
     };
 
