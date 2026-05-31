@@ -2073,6 +2073,44 @@ router.post("/bulk-runs/:id/heartbeat", async (req: Request, res: Response) => {
   }
 });
 
+// ── POST /agent/task-callback ────────────────────────────────────────────
+// Autonomous (free-mode) worker callback. Unlike bulk runs, a --task run
+// has no bulk_run row to finalize, so the worker reports its outcome here
+// directly when it finishes. We forward to rs-server's declaration result
+// endpoint so the declaration flips from "dispatched" to "submitted" /
+// "failed" with the receipt the agent parsed. tenantMiddleware already
+// validated the worker's X-Internal-Secret + X-Company-Id.
+router.post("/task-callback", async (req: Request, res: Response) => {
+  try {
+    const body = (req.body ?? {}) as {
+      declaration_id?: string;
+      status?: "submitted" | "failed";
+      receipt?: string | null;
+      error?: string | null;
+    };
+    if (!body.declaration_id || typeof body.declaration_id !== "string") {
+      throw new HttpError(400, "declaration_id is required");
+    }
+    const status = body.status === "submitted" ? "submitted" : "failed";
+
+    const { rsServerClient } = await import("../services/rs-server-client");
+    await rsServerClient.post(
+      `/internal/tools/declarations/${encodeURIComponent(body.declaration_id)}/result`,
+      {
+        companyId: req.companyId,
+        body: {
+          status,
+          receipt: body.receipt ?? null,
+          error: status === "failed" ? (body.error ?? "autonomous run failed") : null,
+        },
+      },
+    );
+    res.json({ success: true });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
 // ── POST /agent/bulk-runs/:id/finalize ──────────────────────────────────────
 // The worker calls this when it has finished iterating all rows so the run
 // transitions to a terminal state. Backend computes ok/failed from row counts.
