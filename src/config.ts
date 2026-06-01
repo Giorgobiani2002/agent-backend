@@ -1,5 +1,7 @@
 export const config = {
   geminiApiKey: process.env.GEMINI_API_KEY,
+  cartesiaApiKey: process.env.CARTESIA_API_KEY,
+  openaiApiKey: process.env.OPENAI_API_KEY,
   geminiEmbeddingModel: process.env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-2",
   geminiChatModel: process.env.GEMINI_CHAT_MODEL ?? "gemini-3.1-flash-lite-preview",
   geminiPlaybookModel: process.env.GEMINI_PLAYBOOK_MODEL ?? "gemini-3.1-flash-lite-preview",
