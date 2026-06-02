@@ -2165,6 +2165,11 @@ router.post("/bulk-runs/:id/finalize", async (req: Request, res: Response) => {
           : typeof reviewPayload.declaration_number === "string"
             ? reviewPayload.declaration_number
             : null;
+      // Submitted-but-visually-unconfirmed: the deterministic checks passed
+      // (so the form went in) but the visual validator couldn't confirm a
+      // receipt page. Don't show a false "Failed" — flag it for the user to
+      // eyeball on rs.ge. See the submission-status-semantics decision.
+      const needsVerification = data.rows.some((r) => r.completion_state === "needs_review");
       try {
         const { rsServerClient } = await import("../services/rs-server-client");
         await rsServerClient.post(
@@ -2175,6 +2180,7 @@ router.post("/bulk-runs/:id/finalize", async (req: Request, res: Response) => {
               status: outcome === "succeeded" ? "submitted" : "failed",
               receipt,
               bulk_run_id: runId,
+              needs_verification: outcome === "succeeded" && needsVerification,
               error: outcome === "failed" ? (row?.error ?? "playbook failed") : null,
             },
           },
