@@ -50,7 +50,14 @@ router.post("/dispatch-declaration", async (req: Request, res: Response) => {
       declaration_id?: string;
       playbook_key?: string;
       data?: Record<string, unknown>;
+      // Safety mode for the run. Defaults to halt-on-dangerous (stop before
+      // the final submit). Payroll passes "auto" for zero-touch submission.
+      safety_mode?: "auto" | "halt-on-dangerous" | "dry-run";
     };
+    const SAFETY_MODES = ["auto", "halt-on-dangerous", "dry-run"] as const;
+    const safetyMode = (SAFETY_MODES as readonly string[]).includes(body.safety_mode ?? "")
+      ? (body.safety_mode as (typeof SAFETY_MODES)[number])
+      : ("halt-on-dangerous" as const);
     const sourceType = body.source_type || "declaration";
     const sourceId = body.source_id || body.declaration_id;
     const resultPath =
@@ -201,7 +208,7 @@ router.post("/dispatch-declaration", async (req: Request, res: Response) => {
       playbookColumn: null,
       playbookMap: {},
       defaultPlaybookId: null,
-      safetyMode: "halt-on-dangerous" as const,
+      safetyMode,
       allowedDomains: ["rs.ge"],
       sessionKey: "main_user",
       maxSteps: null,
