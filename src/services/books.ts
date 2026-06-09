@@ -12,7 +12,7 @@ import {
   replaceBookContent,
 } from "../repositories/books";
 import { GeminiService, geminiService } from "./gemini";
-import { chunkText, formatDocumentForEmbedding } from "../utils/chunking";
+import { chunkText, formatDocumentForEmbedding, type TextChunk } from "../utils/chunking";
 import {
   defaultDataDirectory,
   discoverPdfFiles,
@@ -64,6 +64,12 @@ export async function ingestBook(
     text: string;
     metadata: Record<string, unknown>;
     chunkMetadata?: Record<string, unknown>;
+    // File/legal/FINO ingestion is server-trusted and may exceed the 200K cap
+    // that protects the manual paste UI — set this to skip the length guard.
+    allowLarge?: boolean;
+    // Lets callers pick a structure-aware chunker (e.g. chunkStructured for
+    // legislation) instead of the default prose chunker.
+    chunker?: (text: string) => TextChunk[];
   },
   gemini: GeminiService = geminiService,
 ) {
@@ -78,9 +84,11 @@ export async function ingestBook(
     throw new HttpError(400, "text is required");
   }
 
-  ensureTextWithinLimit(text);
+  if (!input.allowLarge) {
+    ensureTextWithinLimit(text);
+  }
 
-  const chunks = chunkText(text);
+  const chunks = (input.chunker ?? chunkText)(text);
 
   if (!chunks.length) {
     throw new HttpError(400, "text did not produce any chunks");

@@ -27,6 +27,13 @@ export interface ToolCallTurn {
   functionCalls: FunctionCall[];
   text: string;
   model: string;
+  /**
+   * The model's raw turn content (parts), echoed back verbatim on the next
+   * call. Critical for "thinking" Gemini models: each functionCall part
+   * carries a `thoughtSignature` that MUST be preserved, otherwise the next
+   * request fails with "Function call is missing a thought_signature".
+   */
+  modelContent?: Content;
 }
 
 export interface GeminiService {
@@ -171,6 +178,7 @@ export const geminiService: GeminiService = {
       functionCalls,
       text: response.text?.trim() ?? "",
       model: response.modelVersion ?? config.geminiChatModel,
+      modelContent: response.candidates?.[0]?.content,
     };
   },
 

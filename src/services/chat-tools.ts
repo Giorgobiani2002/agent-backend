@@ -180,6 +180,24 @@ export const CHAT_TOOLS: ChatTool[] = [
     },
   },
   {
+    name: "draft_vat_return",
+    description:
+      "Draft and explain the company's monthly VAT (დღგ) return for a period. Computes output VAT (from sales invoices), input VAT (from ACCEPTED purchase invoices) and net VAT payable from the invoices synced to declario, returning totals, invoice counts, sample invoice ids and warnings. Use when the user asks to prepare/draft/explain their VAT for a month. The Georgian VAT rate is 18%. IMPORTANT: rs.ge has NO declaration API — this only DRAFTS the figures; the actual return is filed in the rs.ge UI. Ground the explanation in the Tax Code articles from the knowledge base and surface any warnings (e.g. input VAT not synced).",
+    parameters: {
+      type: "object",
+      properties: {
+        year: { type: "integer", description: "period year, e.g. 2026; defaults to the current period" },
+        month: { type: "integer", minimum: 1, maximum: 12, description: "period month 1-12; defaults to the current period" },
+      },
+    },
+    async handler(ctx, args) {
+      return safeRsGet(`/internal/tools/vat-preview`, ctx, {
+        year: num(args.year),
+        month: num(args.month),
+      });
+    },
+  },
+  {
     name: "list_pipeline_runs",
     description:
       "List the company's recent pipeline runs (the workflows that turn orders into waybills/declarations). Filter by status='failed' to see what broke.",
@@ -853,7 +871,8 @@ export function chatToolSystemInstruction(): string {
   return [
     "You are declario's chat assistant for accountants and SMB owners.",
     "When the user asks about live data — a specific waybill, declaration, pipeline run, bulk run, order, schedule, playbook, or AI run, or about why something failed — CALL ONE OF THE TOOLS BELOW first. Do not fabricate IDs, statuses, or error reasons. If you need data, ask the tool; if the tool returns nothing or an error, say so plainly.",
-    "When the user asks a general accounting/tax-code question, answer from your training and the RAG context (no tool call needed).",
+    "Computing THE COMPANY'S OWN VAT (დღგ) for a period is LIVE DATA, not a general question. You MUST call `draft_vat_return` whenever the user asks to compute/draft/prepare/explain THEIR OWN VAT for a month (e.g. 'ჩვენი/ჩემი დღგ', 'დღგ დამიდგინე/გამოთვალე', 'how much VAT do we owe this month') and base every VAT figure strictly on the tool's result, reading out any warnings it returns. Do NOT call the tool for GENERAL VAT questions — the rate, definitions, or how the rules work — answer those from the knowledge base instead. There is no computation tool yet for payroll or profit tax: for those, explain from the knowledge base and say a calculation tool isn't available yet — do NOT call draft_vat_return for them.",
+    "When the user asks a general accounting/tax-code question (definitions, how a rule works, what the law says — not their own numbers), answer from your training and the RAG context (no tool call needed), citing the relevant articles.",
     "After tool results come back, write a concise human answer. Quote specific IDs and short error excerpts so the user can navigate to the right page.",
     "Available tools:",
     lines,
@@ -866,7 +885,22 @@ export function chatToolSystemInstruction(): string {
  * still happen either way; this just avoids burning an embedding call.
  */
 export function looksLikeDiagnosticQuery(text: string): boolean {
-  return /\b(waybill|declaration|pipeline|bulk|failed|retry|alert|error|status|order|playbook|schedule|run)\b|#\d+/i.test(
-    text,
-  );
+  // Live-data lookups (waybills/declarations/…) AND company-own computations
+  // (e.g. "compute our VAT for May") skip the RAG embed and go straight to the
+  // tool loop: their answer lives in live data + tools, not the book corpus,
+  // and a noisy RAG context otherwise distracts the model from calling the
+  // tool. General tax questions ("what is the VAT rate") still go through RAG.
+  if (
+    /\b(waybill|declaration|pipeline|bulk|failed|retry|alert|error|status|order|playbook|schedule|run)\b|#\d+/i.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  const mentionsVat = /(დღგ|\bvat\b)/i.test(text);
+  const computeIntent =
+    /(გამოთვალ|დამიდგ|რამდენ|გადასახდ|დეკლარაცი|ჩვენ|ჩემ|draft|compute|prepare|owe|how much)/i.test(
+      text,
+    );
+  return mentionsVat && computeIntent;
 }

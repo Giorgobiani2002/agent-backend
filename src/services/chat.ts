@@ -422,16 +422,34 @@ async function runToolLoop(
     }
 
     // Append the model's tool-call turn so subsequent turns see the
-    // call alongside our response (Gemini requires this pairing).
-    contents.push({
-      role: "model",
-      parts: turn.functionCalls.map((call: FunctionCall) => ({
-        functionCall: { name: call.name ?? "", args: call.args ?? {} },
-      })),
-    });
+    // call alongside our response (Gemini requires this pairing). Echo the
+    // RAW model content when available — its functionCall parts carry a
+    // `thoughtSignature` that thinking models require on the next request;
+    // rebuilding the parts by hand drops that signature and Gemini 400s.
+    //
+    // Derive the calls to dispatch from the SAME source we echo, in part
+    // order, so our functionResponse parts line up 1:1 and positionally with
+    // the model's functionCall parts (Gemini pairs them by position).
+    const echoedParts = turn.modelContent?.parts ?? [];
+    let calls: FunctionCall[];
+    if (echoedParts.length) {
+      contents.push(turn.modelContent as Content);
+      const fromParts = echoedParts
+        .filter((p) => p.functionCall)
+        .map((p) => p.functionCall as FunctionCall);
+      calls = fromParts.length ? fromParts : turn.functionCalls;
+    } else {
+      calls = turn.functionCalls;
+      contents.push({
+        role: "model",
+        parts: calls.map((call: FunctionCall) => ({
+          functionCall: { name: call.name ?? "", args: call.args ?? {} },
+        })),
+      });
+    }
 
     const responseParts = await Promise.all(
-      turn.functionCalls.map(async (call: FunctionCall) => {
+      calls.map(async (call: FunctionCall) => {
         const name = call.name ?? "";
         const args = (call.args ?? {}) as Record<string, unknown>;
         const t0 = Date.now();

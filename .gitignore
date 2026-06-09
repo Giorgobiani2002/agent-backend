@@ -33,6 +33,11 @@ data/uploads/
 data/recordings/
 data/profiles/
 data/screenshots/
+
+# Fetched legislation artifacts — regenerable via `npm run matsne:fetch`; the
+# corpus lives in pgvector, not the repo. The manifest (source list) is kept.
+data/legal/*.md
+data/legal/*.pdf
 *.xlsx
 inspect-playbook.js
 make-realistic-vat-test.js
