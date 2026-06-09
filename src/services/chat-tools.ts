@@ -102,6 +102,25 @@ async function safeRsGet<T>(
   }
 }
 
+async function safeRsPost<T>(
+  path: string,
+  ctx: ToolCallContext,
+  body?: Record<string, unknown>,
+): Promise<T | { error: string }> {
+  try {
+    return await rsServerClient.post<T>(path, {
+      companyId: ctx.companyId,
+      userId: ctx.userId,
+      body: body ?? {},
+    });
+  } catch (err) {
+    if (err instanceof RsServerClientError) {
+      return { error: err.message };
+    }
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // ── Tool catalog ────────────────────────────────────────────────────────
 
 export const CHAT_TOOLS: ChatTool[] = [
@@ -195,6 +214,75 @@ export const CHAT_TOOLS: ChatTool[] = [
         year: num(args.year),
         month: num(args.month),
       });
+    },
+  },
+  {
+    name: "draft_payroll",
+    description:
+      "Draft and explain THE COMPANY'S OWN payroll for a period from declario's employee records — per employee gross, income tax (20%), pension (2% employee + 2% employer) and net, plus totals and employer cost. Use for any 'our/my payroll', 'ხელფასები დამიდგინე/გამოთვალე', 'how much salary tax do we owe' request, and base every number on the tool result. rs.ge has NO payroll API — this DRAFTS only; filing is a separate step.",
+    parameters: {
+      type: "object",
+      properties: {
+        year: { type: "integer", description: "period year; defaults to current" },
+        month: { type: "integer", minimum: 1, maximum: 12, description: "period month 1-12; defaults to current" },
+      },
+    },
+    async handler(ctx, args) {
+      return safeRsGet(`/internal/tools/payroll-preview`, ctx, {
+        year: num(args.year),
+        month: num(args.month),
+      });
+    },
+  },
+  {
+    name: "audit_vat_submission",
+    description:
+      "Audit/verify whether the company's VAT (დღგ) declaration for a period is correct: compares the prepared/submitted figures against a fresh recompute from current invoices and returns any discrepancies (field, declared vs recomputed, delta) plus the submission status. Use whenever the user asks to CHECK/VERIFY their already-prepared or submitted/uploaded VAT ('გადაამოწმე ჩემი ატვირთული დღგ', 'is my submitted VAT correct', 'ეს დეკლარაცია სწორია?'). Read-only. Explain any discrepancies and cite the relevant Tax Code rule.",
+    parameters: {
+      type: "object",
+      properties: {
+        year: { type: "integer", description: "period year; defaults to current" },
+        month: { type: "integer", minimum: 1, maximum: 12, description: "period month 1-12; defaults to current" },
+      },
+    },
+    async handler(ctx, args) {
+      return safeRsGet(`/internal/tools/audit-vat`, ctx, {
+        year: num(args.year),
+        month: num(args.month),
+      });
+    },
+  },
+  {
+    name: "file_vat_return",
+    description:
+      "Prepare AND file the company's VAT (დღგ) declaration for a period on rs.ge. Use when the user asks to FILE/submit/'დააფიქსირე/გააგზავნე' their VAT. TWO-STEP SAFETY PROTOCOL: (1) call WITHOUT confirm first — it prepares the draft and returns the figures; show them and ask the user to explicitly approve filing THIS declaration. (2) Call again with confirm=true ONLY AFTER the user clearly says yes in this conversation. NEVER set confirm=true on your own. Filing dispatches the rs.ge browser playbook in halt-on-dangerous mode (it fills the form and stops before the final submit for the user to finalize), so nothing is submitted silently.",
+    parameters: {
+      type: "object",
+      properties: {
+        year: { type: "integer", description: "period year; defaults to current" },
+        month: { type: "integer", minimum: 1, maximum: 12, description: "period month 1-12; defaults to current" },
+        confirm: {
+          type: "boolean",
+          description:
+            "Set true ONLY after the user has explicitly approved filing this specific declaration in the conversation. Omit/false to just prepare and ask for confirmation.",
+        },
+      },
+    },
+    async handler(ctx, args) {
+      const year = num(args.year);
+      const month = num(args.month);
+      if (args.confirm === true) {
+        return safeRsPost(`/internal/tools/declarations/file`, ctx, { year, month });
+      }
+      const prepared = await safeRsPost(`/internal/tools/declarations/prepare`, ctx, {
+        year,
+        month,
+      });
+      return {
+        requiresConfirmation: true,
+        prepared,
+        note: "Draft prepared but NOT filed. Show the figures and ask the user to confirm; only then call file_vat_return again with confirm=true.",
+      };
     },
   },
   {
@@ -871,7 +959,8 @@ export function chatToolSystemInstruction(): string {
   return [
     "You are declario's chat assistant for accountants and SMB owners.",
     "When the user asks about live data — a specific waybill, declaration, pipeline run, bulk run, order, schedule, playbook, or AI run, or about why something failed — CALL ONE OF THE TOOLS BELOW first. Do not fabricate IDs, statuses, or error reasons. If you need data, ask the tool; if the tool returns nothing or an error, say so plainly.",
-    "Computing THE COMPANY'S OWN VAT (დღგ) for a period is LIVE DATA, not a general question. You MUST call `draft_vat_return` whenever the user asks to compute/draft/prepare/explain THEIR OWN VAT for a month (e.g. 'ჩვენი/ჩემი დღგ', 'დღგ დამიდგინე/გამოთვალე', 'how much VAT do we owe this month') and base every VAT figure strictly on the tool's result, reading out any warnings it returns. Do NOT call the tool for GENERAL VAT questions — the rate, definitions, or how the rules work — answer those from the knowledge base instead. There is no computation tool yet for payroll or profit tax: for those, explain from the knowledge base and say a calculation tool isn't available yet — do NOT call draft_vat_return for them.",
+    "Computing or verifying THE COMPANY'S OWN figures for a period is LIVE DATA, not a general question — call the matching tool and base every number strictly on its result, reading out any warnings or discrepancies: `draft_vat_return` for VAT (დღგ); `draft_payroll` for payroll/salaries (ხელფასები — gross / income tax 20% / pension); `audit_vat_submission` to CHECK/VERIFY an already-prepared or submitted VAT declaration against current data ('გადაამოწმე ჩემი ატვირთული დღგ', 'is my submitted VAT correct'). Do NOT call these for GENERAL questions — the rate, definitions, how a rule works, or how to fill a form — answer those from the knowledge base, citing the relevant articles. There is no computation tool yet for profit tax or the small-business 1% tax — explain those from the knowledge base and say a calculation tool isn't available yet.",
+    "To FILE/submit a VAT declaration on rs.ge ('დააფიქსირე/გააგზავნე ჩემი დღგ') use `file_vat_return` with a STRICT two-step protocol: first call it WITHOUT confirm to prepare and show the figures, then ask the user to explicitly approve filing THIS declaration; only call it again with confirm=true AFTER the user clearly says yes in this conversation. NEVER set confirm=true on your own initiative, and never claim a declaration is 'filed/submitted' until the tool result confirms it. (Filing runs the rs.ge playbook in halt-on-dangerous mode: it fills the form and stops before the final submit for the user to finalize — so it requires a recorded rs.ge.vat-declaration playbook and the user's final click on rs.ge.)",
     "When the user asks a general accounting/tax-code question (definitions, how a rule works, what the law says — not their own numbers), answer from your training and the RAG context (no tool call needed), citing the relevant articles.",
     "After tool results come back, write a concise human answer. Quote specific IDs and short error excerpts so the user can navigate to the right page.",
     "Available tools:",
@@ -897,10 +986,11 @@ export function looksLikeDiagnosticQuery(text: string): boolean {
   ) {
     return true;
   }
-  const mentionsVat = /(დღგ|\bvat\b)/i.test(text);
-  const computeIntent =
-    /(გამოთვალ|დამიდგ|რამდენ|გადასახდ|დეკლარაცი|ჩვენ|ჩემ|draft|compute|prepare|owe|how much)/i.test(
+  const taxTopic =
+    /(დღგ|\bvat\b|ხელფას|payroll|ანაზღაურ|დეკლარაცი|declaration)/i.test(text);
+  const actionIntent =
+    /(გამოთვალ|დამიდგ|რამდენ|გადასახდ|ჩვენ|ჩემ|draft|compute|prepare|owe|how much|გადაამოწმ|შეამოწმ|audit|verify|სწორია|დააფიქს|გააგზავ|file|submit)/i.test(
       text,
     );
-  return mentionsVat && computeIntent;
+  return taxTopic && actionIntent;
 }
