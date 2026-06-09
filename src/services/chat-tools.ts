@@ -253,6 +253,41 @@ export const CHAT_TOOLS: ChatTool[] = [
     },
   },
   {
+    name: "import_employees",
+    description:
+      "Add or update the company's employees and their MONTHLY GROSS salaries from a list the user gives — pasted text (e.g. 'ნინო 2000, გია 1500') or a salary sheet you have parsed. Each item: { name, gross (monthly gross in GEL), personal_id? (11-digit Georgian ID), pension_participant? }. Upserts by personal_id or name (re-importing updates in place). Use when the user says e.g. 'ამ თანამშრომლების ხელფასები ამიტვირთე/დაამატე'. After importing, offer to call draft_payroll to compute the payroll.",
+    parameters: {
+      type: "object",
+      properties: {
+        employees: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              gross: { type: "number", description: "monthly gross salary in GEL" },
+              personal_id: { type: "string", description: "11-digit Georgian personal number (optional)" },
+              pension_participant: { type: "boolean" },
+            },
+            required: ["name", "gross"],
+          },
+        },
+      },
+      required: ["employees"],
+    },
+    async handler(ctx, args) {
+      const list = Array.isArray(args.employees) ? (args.employees as any[]) : [];
+      if (!list.length) return { error: "employees list is required" };
+      const employees = list.map((e) => ({
+        name: str(e?.name),
+        gross_salary: num(e?.gross) ?? num(e?.gross_salary) ?? 0,
+        personal_id: str(e?.personal_id),
+        pension_participant: e?.pension_participant !== false,
+      }));
+      return safeRsPost(`/internal/tools/payroll/employees/bulk`, ctx, { employees });
+    },
+  },
+  {
     name: "file_vat_return",
     description:
       "Prepare AND file the company's VAT (დღგ) declaration for a period on rs.ge. Use when the user asks to FILE/submit/'დააფიქსირე/გააგზავნე' their VAT. TWO-STEP SAFETY PROTOCOL: (1) call WITHOUT confirm first — it prepares the draft and returns the figures; show them and ask the user to explicitly approve filing THIS declaration. (2) Call again with confirm=true ONLY AFTER the user clearly says yes in this conversation. NEVER set confirm=true on your own. Filing dispatches the rs.ge browser playbook in halt-on-dangerous mode (it fills the form and stops before the final submit for the user to finalize), so nothing is submitted silently.",
@@ -960,6 +995,7 @@ export function chatToolSystemInstruction(): string {
     "You are declario's chat assistant for accountants and SMB owners.",
     "When the user asks about live data — a specific waybill, declaration, pipeline run, bulk run, order, schedule, playbook, or AI run, or about why something failed — CALL ONE OF THE TOOLS BELOW first. Do not fabricate IDs, statuses, or error reasons. If you need data, ask the tool; if the tool returns nothing or an error, say so plainly.",
     "Computing or verifying THE COMPANY'S OWN figures for a period is LIVE DATA, not a general question — call the matching tool and base every number strictly on its result, reading out any warnings or discrepancies: `draft_vat_return` for VAT (დღგ); `draft_payroll` for payroll/salaries (ხელფასები — gross / income tax 20% / pension); `audit_vat_submission` to CHECK/VERIFY an already-prepared or submitted VAT declaration against current data ('გადაამოწმე ჩემი ატვირთული დღგ', 'is my submitted VAT correct'). Do NOT call these for GENERAL questions — the rate, definitions, how a rule works, or how to fill a form — answer those from the knowledge base, citing the relevant articles. There is no computation tool yet for profit tax or the small-business 1% tax — explain those from the knowledge base and say a calculation tool isn't available yet.",
+    "To add/update employees and their salaries from a list the user gives ('ამ თანამშრომლების ხელფასები ამიტვირთე/დაამატე', pasted text or a parsed salary sheet), call `import_employees` with the structured list, then offer to call `draft_payroll`.",
     "To FILE/submit a VAT declaration on rs.ge ('დააფიქსირე/გააგზავნე ჩემი დღგ') use `file_vat_return` with a STRICT two-step protocol: first call it WITHOUT confirm to prepare and show the figures, then ask the user to explicitly approve filing THIS declaration; only call it again with confirm=true AFTER the user clearly says yes in this conversation. NEVER set confirm=true on your own initiative, and never claim a declaration is 'filed/submitted' until the tool result confirms it. (Filing runs the rs.ge playbook in halt-on-dangerous mode: it fills the form and stops before the final submit for the user to finalize — so it requires a recorded rs.ge.vat-declaration playbook and the user's final click on rs.ge.)",
     "When the user asks a general accounting/tax-code question (definitions, how a rule works, what the law says — not their own numbers), answer from your training and the RAG context (no tool call needed), citing the relevant articles.",
     "After tool results come back, write a concise human answer. Quote specific IDs and short error excerpts so the user can navigate to the right page.",
@@ -989,7 +1025,7 @@ export function looksLikeDiagnosticQuery(text: string): boolean {
   const taxTopic =
     /(დღგ|\bvat\b|ხელფას|payroll|ანაზღაურ|დეკლარაცი|declaration)/i.test(text);
   const actionIntent =
-    /(გამოთვალ|დამიდგ|რამდენ|გადასახდ|ჩვენ|ჩემ|draft|compute|prepare|owe|how much|გადაამოწმ|შეამოწმ|audit|verify|სწორია|დააფიქს|გააგზავ|file|submit)/i.test(
+    /(გამოთვალ|დამიდგ|რამდენ|გადასახდ|ჩვენ|ჩემ|draft|compute|prepare|owe|how much|გადაამოწმ|შეამოწმ|audit|verify|სწორია|დააფიქს|გააგზავ|file|submit|ტვირთ|დაამატ|import)/i.test(
       text,
     );
   return taxTopic && actionIntent;
