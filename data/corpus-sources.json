@@ -1,0 +1,411 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "ge-tax-code",
+      "title": "საქართველოს საგადასახადო კოდექსი",
+      "rightsStatus": "approved",
+      "license": "Official public legislation",
+      "attribution": "საქართველოს საკანონმდებლო მაცნე",
+      "sourceUrl": "https://matsne.gov.ge/ka/document/view/1043717",
+      "jurisdiction": "GE",
+      "authorityRank": 100,
+      "topic": "tax_law",
+      "language": "ka",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/legal/georgia-tax-code.md",
+        "data/legal/georgia-tax-code.pdf"
+      ]
+    },
+    {
+      "id": "ge-mof-order-996",
+      "title": "ფინანსთა მინისტრის ბრძანება №996",
+      "rightsStatus": "approved",
+      "license": "Official public legislation",
+      "attribution": "საქართველოს საკანონმდებლო მაცნე",
+      "sourceUrl": "https://matsne.gov.ge/ka/document/view/1167887",
+      "jurisdiction": "GE",
+      "authorityRank": 100,
+      "topic": "tax_law",
+      "language": "ka",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/legal/mof-order-996.md",
+        "data/legal/mof-order-996.pdf"
+      ]
+    },
+    {
+      "id": "ge-accounting-law",
+      "title": "კანონი ბუღალტრული აღრიცხვის, ანგარიშგებისა და აუდიტის შესახებ",
+      "rightsStatus": "approved",
+      "license": "Official public legislation",
+      "attribution": "საქართველოს საკანონმდებლო მაცნე",
+      "sourceUrl": "https://matsne.gov.ge/ka/document/view/3866170",
+      "jurisdiction": "GE",
+      "authorityRank": 100,
+      "topic": "accounting_standard",
+      "language": "ka",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/legal/law-accounting-reporting-audit.md",
+        "data/legal/law-accounting-reporting-audit.pdf"
+      ]
+    },
+    {
+      "id": "ge-funded-pensions-law",
+      "title": "საქართველოს კანონი დაგროვებითი პენსიის შესახებ",
+      "rightsStatus": "approved",
+      "license": "Official public legislation",
+      "attribution": "საქართველოს საკანონმდებლო მაცნე",
+      "sourceUrl": "https://matsne.gov.ge/ka/document/view/4280127",
+      "jurisdiction": "GE",
+      "authorityRank": 100,
+      "topic": "tax_law",
+      "language": "ka",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/legal/funded-pensions-law.md",
+        "data/legal/funded-pensions-law.pdf"
+      ]
+    },
+    {
+      "id": "declario-accounting-standards-map",
+      "title": "Georgia Accounting Standards Map for Declario",
+      "rightsStatus": "approved",
+      "license": "Declario original internal reference",
+      "attribution": "Declario",
+      "sourceUrl": "https://www.saras.gov.ge/",
+      "jurisdiction": "GE",
+      "authorityRank": 80,
+      "topic": "accounting_standard",
+      "language": "ka",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/ge-tax-ai-corpus/georgia-accounting-standards-map.md"
+      ]
+    },
+    {
+      "id": "declario-payroll-compliance",
+      "title": "Georgian Payroll Compliance for Declario",
+      "rightsStatus": "approved",
+      "license": "Declario original internal reference",
+      "attribution": "Declario",
+      "sourceUrl": "https://matsne.gov.ge/",
+      "jurisdiction": "GE",
+      "authorityRank": 85,
+      "topic": "tax_law",
+      "language": "ka",
+      "effectiveFrom": "2026-01-01",
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/ge-tax-ai-corpus/georgia-payroll-compliance.md"
+      ]
+    },
+    {
+      "id": "declario-tax-corpus-map",
+      "title": "Georgia Tax and Accounting Corpus Map",
+      "rightsStatus": "approved",
+      "license": "Declario original internal reference",
+      "attribution": "Declario",
+      "sourceUrl": "https://matsne.gov.ge/",
+      "jurisdiction": "GE",
+      "authorityRank": 70,
+      "topic": "reference",
+      "language": "ka",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/ge-tax-ai-corpus/georgia-tax-accounting-corpus-map.md"
+      ]
+    },
+    {
+      "id": "declario-tax-reasoning-rules",
+      "title": "Georgian Tax Reasoning Rules",
+      "rightsStatus": "approved",
+      "license": "Declario original internal reference",
+      "attribution": "Declario",
+      "sourceUrl": "https://matsne.gov.ge/",
+      "jurisdiction": "GE",
+      "authorityRank": 75,
+      "topic": "reference",
+      "language": "ka",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/ge-tax-ai-corpus/georgian-tax-reasoning-rules.md"
+      ]
+    },
+    {
+      "id": "declario-rs-operational-guide",
+      "title": "RS MCP Operational Guide",
+      "rightsStatus": "approved",
+      "license": "Declario original internal reference",
+      "attribution": "Declario",
+      "sourceUrl": "https://rs.ge/",
+      "jurisdiction": "GE",
+      "authorityRank": 80,
+      "topic": "rs_manual",
+      "language": "ka",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/ge-tax-ai-corpus/rs-mcp-operational-guide.md"
+      ]
+    },
+    {
+      "id": "declario-vat-return-skill",
+      "title": "VAT Return Skill",
+      "rightsStatus": "approved",
+      "license": "Declario original internal reference",
+      "attribution": "Declario",
+      "sourceUrl": "https://rs.ge/",
+      "jurisdiction": "GE",
+      "authorityRank": 80,
+      "topic": "rs_manual",
+      "language": "ka",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/ge-tax-ai-corpus/vat-return-skill.md"
+      ]
+    },
+    {
+      "id": "declario-bookkeeping-module",
+      "title": "ბუღალტრული აღრიცხვის პრაქტიკული საფუძვლები",
+      "rightsStatus": "approved",
+      "license": "CC BY 4.0 adaptation",
+      "attribution": "Adapted by Declario from BCcampus Financial Accounting I and II",
+      "sourceUrl": "https://collection.bccampus.ca/course-pack/nCehWQtw",
+      "jurisdiction": "General; Georgian law overrides",
+      "authorityRank": 50,
+      "topic": "accounting_book",
+      "language": "ka",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/open-accounting/bookkeeping-ka.md"
+      ]
+    },
+    {
+      "id": "declario-payroll-module",
+      "title": "ხელფასების აღრიცხვა და კონტროლი",
+      "rightsStatus": "approved",
+      "license": "CC BY 4.0 adaptation plus Declario original Georgian compliance notes",
+      "attribution": "Adapted by Declario from BCcampus Financial Accounting I",
+      "sourceUrl": "https://collection.bccampus.ca/course-pack/nCehWQtw",
+      "jurisdiction": "GE",
+      "authorityRank": 60,
+      "topic": "accounting_book",
+      "language": "ka",
+      "effectiveFrom": "2026-01-01",
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/open-accounting/payroll-ka.md"
+      ]
+    },
+    {
+      "id": "declario-vat-module",
+      "title": "დღგ-ის აღრიცხვის პრაქტიკული მოდული",
+      "rightsStatus": "approved",
+      "license": "Declario original educational module",
+      "attribution": "Declario; Georgian Tax Code and Order №996 control",
+      "sourceUrl": "https://matsne.gov.ge/ka/document/view/1043717",
+      "jurisdiction": "GE",
+      "authorityRank": 65,
+      "topic": "accounting_book",
+      "language": "ka",
+      "effectiveFrom": "2026-01-01",
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/open-accounting/vat-ka.md"
+      ]
+    },
+    {
+      "id": "declario-close-reporting-module",
+      "title": "პერიოდის დახურვა და ფინანსური ანგარიშგება",
+      "rightsStatus": "approved",
+      "license": "CC BY 4.0 adaptation",
+      "attribution": "Adapted by Declario from BCcampus Financial Accounting I, II and Intermediate Financial Accounting",
+      "sourceUrl": "https://collection.bccampus.ca/textbook/jPKpdnhA",
+      "jurisdiction": "General; Georgian reporting framework overrides",
+      "authorityRank": 50,
+      "topic": "accounting_book",
+      "language": "ka",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/open-accounting/close-reporting-ka.md"
+      ]
+    },
+    {
+      "id": "declario-cost-accounting-module",
+      "title": "მმართველობითი და ხარჯების აღრიცხვა",
+      "rightsStatus": "approved",
+      "license": "CC BY 4.0 adaptation",
+      "attribution": "Adapted by Declario from Open Cost Accounting by Brian D. Knox",
+      "sourceUrl": "https://www.opencostaccounting.org/",
+      "jurisdiction": "General",
+      "authorityRank": 45,
+      "topic": "accounting_book",
+      "language": "ka",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/open-accounting/cost-accounting-ka.md"
+      ]
+    },
+    {
+      "id": "declario-finance-module",
+      "title": "კორპორაციული ფინანსების პრაქტიკული საფუძვლები",
+      "rightsStatus": "approved",
+      "license": "CC BY 4.0 adaptation",
+      "attribution": "Adapted by Declario from Corporate Finance for Long-Term Value by Schoenmaker and Schramade",
+      "sourceUrl": "https://library.oapen.org/handle/20.500.12657/76724",
+      "jurisdiction": "General",
+      "authorityRank": 45,
+      "topic": "accounting_book",
+      "language": "ka",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/open-accounting/finance-ka.md"
+      ]
+    },
+    {
+      "id": "bccampus-financial-accounting-i",
+      "title": "Financial Accounting I Course Supplement",
+      "rightsStatus": "approved",
+      "license": "CC BY 4.0",
+      "attribution": "Evan van Dyk, Coast Mountain College; BCcampus",
+      "sourceUrl": "https://collection.bccampus.ca/course-pack/nCehWQtw",
+      "downloadUrl": "https://cdn2.repo.bccws.ca/resources/course-packs/5/49/Financial_Accounting_I_Course_Supplement_Guide_d27f4d5320.docx",
+      "jurisdiction": "General",
+      "authorityRank": 40,
+      "topic": "accounting_book",
+      "language": "en",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/open-accounting/sources/financial-accounting-i.docx"
+      ]
+    },
+    {
+      "id": "bccampus-financial-accounting-ii",
+      "title": "Financial Accounting II Course Supplement",
+      "rightsStatus": "approved",
+      "license": "CC BY 4.0",
+      "attribution": "Evan van Dyk, Coast Mountain College; BCcampus",
+      "sourceUrl": "https://collection.bccampus.ca/course-pack/yHbUXnbU",
+      "downloadUrl": "https://cdn2.repo.bccws.ca/resources/course-packs/8/73/fin_acct_ii_Acct151_Booklet_7dfce2c609.docx",
+      "jurisdiction": "General",
+      "authorityRank": 40,
+      "topic": "accounting_book",
+      "language": "en",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/open-accounting/sources/financial-accounting-ii.docx"
+      ]
+    },
+    {
+      "id": "bccampus-intermediate-accounting-1",
+      "title": "Intermediate Financial Accounting Volume 1",
+      "rightsStatus": "approved",
+      "license": "CC BY 4.0",
+      "attribution": "Glenn Arnold and Suzanne Kyle; Lyryx; BCcampus",
+      "sourceUrl": "https://collection.bccampus.ca/textbook/jPKpdnhA",
+      "downloadUrl": "https://cdn2.repo.bccws.ca/resources/textbooks/166/formats/OTB_155_02_Intermediate_Financial_Accounting_Vol1_2021_A_f7c2d3ad73.pdf",
+      "jurisdiction": "General IFRS",
+      "authorityRank": 40,
+      "topic": "accounting_book",
+      "language": "en",
+      "version": "2021A",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/open-accounting/sources/intermediate-financial-accounting-1.pdf"
+      ]
+    },
+    {
+      "id": "bccampus-intermediate-accounting-2",
+      "title": "Intermediate Financial Accounting Volume 2",
+      "rightsStatus": "approved",
+      "license": "CC BY 4.0",
+      "attribution": "Glenn Arnold and Suzanne Kyle; Lyryx; BCcampus",
+      "sourceUrl": "https://collection.bccampus.ca/textbook/zKNQRqDQ",
+      "downloadUrl": "https://cdn2.repo.bccws.ca/resources/textbooks/167/formats/OTB_156_02_Intermediate_Financial_Accounting_Vol2_2021_A_d47cb05c57.pdf",
+      "jurisdiction": "General IFRS",
+      "authorityRank": 40,
+      "topic": "accounting_book",
+      "language": "en",
+      "version": "2021A",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/open-accounting/sources/intermediate-financial-accounting-2.pdf"
+      ]
+    },
+    {
+      "id": "oapen-corporate-finance-long-term-value",
+      "title": "Corporate Finance for Long-Term Value",
+      "rightsStatus": "approved",
+      "license": "CC BY 4.0",
+      "attribution": "Dirk Schoenmaker and Willem Schramade; Springer Nature",
+      "sourceUrl": "https://library.oapen.org/handle/20.500.12657/76724",
+      "downloadUrl": "https://library.oapen.org/bitstream/handle/20.500.12657/76724/978-3-031-35009-2.pdf?isAllowed=y&sequence=1",
+      "jurisdiction": "General",
+      "authorityRank": 40,
+      "topic": "accounting_book",
+      "language": "en",
+      "version": "2023",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "localPaths": [
+        "data/open-accounting/sources/corporate-finance-for-long-term-value.pdf"
+      ]
+    },
+    {
+      "id": "restricted-acca-bpp",
+      "title": "BPP ACCA F1 notes",
+      "rightsStatus": "restricted",
+      "license": "Commercial copyrighted material; no production RAG licence recorded",
+      "attribution": "BPP Learning Media / ACCA",
+      "sourceUrl": null,
+      "jurisdiction": "General",
+      "authorityRank": 0,
+      "topic": "accounting_book",
+      "language": "en",
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "checksum": null,
+      "pathPrefix": "data/accounting/acca-"
+    }
+  ]
+}

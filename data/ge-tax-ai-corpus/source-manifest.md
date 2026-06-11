@@ -14,6 +14,7 @@ soft-boost the right material.
 ## Tier 1 — primary legislation (`topic: tax_law`)
 - **საქართველოს საგადასახადო კოდექსი** (Tax Code) — VAT, income/profit tax, withholding, deadlines.
 - **ფინანსთა მინისტრის ბრძანება №996** — tax administration procedures (declarations, waybills, e-invoices).
+- **კანონი დაგროვებითი პენსიის შესახებ** — employee/employer/State pension contributions and contribution base.
 - Customs Code / excise where relevant to e-commerce imports.
 
 ## Tier 2 — accounting & reporting (`topic: accounting_standard`)

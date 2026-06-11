@@ -17,6 +17,7 @@ const FOLDERS: CorpusFolderInput[] = [
   { directory: "data/legal", topic: "tax_law", language: "ka" },
   { directory: "data/rs-manuals", topic: "rs_manual", language: "ka" },
   { directory: "data/accounting", topic: "accounting_book", language: "en" },
+  { directory: "data/open-accounting", topic: "accounting_book", language: "ka" },
   { directory: "data/ge-tax-ai-corpus", topic: "reference", language: "ka" },
 ];
 
@@ -30,14 +31,14 @@ async function main(): Promise<void> {
     console.log(`\n▸ ${folder.directory} (topic=${folder.topic})`);
     const results = await ingestCorpusFolder({ ...folder, directory: dir, force });
     for (const r of results) {
-      const tag = r.error ? "fail" : r.skipped ? "skip" : "ok  ";
+      const tag = r.error && !r.skipped ? "fail" : r.error ? "deny" : r.skipped ? "skip" : "ok  ";
       console.log(`  ${tag} ${r.sourcePath}${r.error ? `: ${r.error}` : ""}`);
     }
     all.push(...results);
   }
 
   console.log("\n" + JSON.stringify(summarize(all), null, 2));
-  if (all.some((r) => r.error)) process.exitCode = 1;
+  if (all.some((r) => r.error && !r.skipped)) process.exitCode = 1;
 }
 
 main()

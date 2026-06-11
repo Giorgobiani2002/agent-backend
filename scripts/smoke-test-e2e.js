@@ -94,6 +94,28 @@ function expect(condition, label, actual) {
   });
   expect(rs2.status === 200, "good secret -> 200", `got ${rs2.status}`);
 
+  // The waybill preview route (chat `upload_waybills_for_date` step 1) must be
+  // mounted and behind the same guard. We can't assert 200 here — the guard
+  // requires a real tenant and "smoke" is fake — but a guarded-but-mounted
+  // route answers 403 (not 404) when the secret is missing.
+  const rs3 = await call({
+    host: RS_HOST,
+    path: "/api/v1/internal/tools/waybills/preview-from-orders?date=2026-06-10",
+    method: "GET",
+    headers: { "X-Company-Id": "smoke" },
+    label: "rs-server: waybill preview route guarded",
+  });
+  expect(rs3.status === 403, "waybill preview no secret -> 403 (route mounted + guarded)", `got ${rs3.status}`);
+
+  const rs4 = await call({
+    host: RS_HOST,
+    path: "/api/v1/internal/tools/invoices/preview-from-orders?date=2026-06-10",
+    method: "GET",
+    headers: { "X-Company-Id": "smoke" },
+    label: "rs-server: invoice preview route guarded",
+  });
+  expect(rs4.status === 403, "invoice preview no secret -> 403 (route mounted + guarded)", `got ${rs4.status}`);
+
   console.log("\n[2] agent-runtime health");
   const r1 = await call({ host: RUNTIME_HOST, path: "/health", label: "runtime: /health" });
   expect(r1.status === 200, "/health -> 200", `got ${r1.status}`);

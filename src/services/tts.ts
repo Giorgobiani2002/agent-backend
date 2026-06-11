@@ -1,57 +1,69 @@
 import { config } from "../config";
 import { HttpError } from "../errors";
+import { getVertexClient } from "./vertex";
+
+function pcmToWav(pcm: Buffer, sampleRate = 24_000, channels = 1, bitsPerSample = 16) {
+    if (pcm.length >= 12 && pcm.toString("ascii", 0, 4) === "RIFF") return pcm;
+
+    const header = Buffer.alloc(44);
+    const byteRate = sampleRate * channels * bitsPerSample / 8;
+    const blockAlign = channels * bitsPerSample / 8;
+
+    header.write("RIFF", 0);
+    header.writeUInt32LE(36 + pcm.length, 4);
+    header.write("WAVE", 8);
+    header.write("fmt ", 12);
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(channels, 22);
+    header.writeUInt32LE(sampleRate, 24);
+    header.writeUInt32LE(byteRate, 28);
+    header.writeUInt16LE(blockAlign, 32);
+    header.writeUInt16LE(bitsPerSample, 34);
+    header.write("data", 36);
+    header.writeUInt32LE(pcm.length, 40);
+
+    return Buffer.concat([header, pcm]);
+}
 
 /**
- * Service for Text-to-Speech conversion using Cartesia.ai.
+ * Synthesizes speech through Vertex AI Gemini and returns WAV audio.
  */
 export class TtsService {
-    /**
-     * Converts text to speech audio.
-     * @param text The text to convert.
-     * @returns Audio data as a Buffer.
-     */
     async synthesize(text: string): Promise<Buffer> {
-        if (!config.cartesiaApiKey) {
-            throw new HttpError(500, "Cartesia API key is not configured");
-        }
-
         try {
-            const response = await fetch("https://api.cartesia.ai/tts/bytes", {
-                method: "POST",
-                headers: {
-                    "X-API-Key": config.cartesiaApiKey,
-                    "Cartesia-Version": "2024-06-10",
-                    "Content-Type": "application/json",
+            const response = await getVertexClient().models.generateContent({
+                model: config.geminiTtsModel,
+                contents: [{
+                    role: "user",
+                    parts: [{
+                        text: `[warm, conversational, responsive, natural pace, subtle variation, no announcer tone] ${text}`,
+                    }],
+                }],
+                config: {
+                    responseModalities: ["AUDIO"],
+                    speechConfig: {
+                        voiceConfig: {
+                            prebuiltVoiceConfig: {
+                                voiceName: config.geminiTtsVoice,
+                            },
+                        },
+                    },
                 },
-                body: JSON.stringify({
-                    model_id: "sonic-multilingual",
-                    transcript: text,
-                    voice: {
-                        mode: "id",
-                        id: "794f9389-aac1-45b6-b726-9d9369183238", // Baritone voice, usually good for Georgian
-                    },
-                    output_format: {
-                        container: "wav",
-                        sample_rate: 24000,
-                        encoding: "pcm_f32le",
-                    },
-                    language: "ka", // Georgian
-                }),
             });
 
-            if (!response.ok) {
-                const error = (await response.json()) as any;
-                throw new HttpError(
-                    response.status,
-                    `Cartesia synthesis failed: ${error.message || response.statusText}`,
-                );
+            const data = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+            if (!data) {
+                throw new HttpError(502, "Gemini TTS returned no audio content");
             }
 
-            const arrayBuffer = await response.arrayBuffer();
-            return Buffer.from(arrayBuffer);
-        } catch (error: any) {
+            return pcmToWav(Buffer.from(data, "base64"));
+        } catch (error: unknown) {
             if (error instanceof HttpError) throw error;
-            throw new HttpError(500, `TTS synthesis error: ${error instanceof Error ? error.message : String(error)}`);
+            throw new HttpError(
+                500,
+                `Speech synthesis failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
         }
     }
 }

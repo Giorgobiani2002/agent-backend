@@ -27,6 +27,17 @@ describe("chat service", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.mocked(gemini.embed).mockImplementation(async () => new Array(1536).fill(0.2));
+    jest.mocked(gemini.generateChatResponse).mockImplementation(async () => ({
+      text: "Assistant answer",
+      model: "gemini-3.1-flash-lite-preview",
+    }));
+    jest.mocked(gemini.generateWithTools).mockImplementation(async () => ({
+      functionCalls: [],
+      text: "Assistant answer",
+      model: "gemini-3.1-flash-lite-preview",
+    }));
+    jest.mocked(gemini.validateData).mockImplementation(async () => []);
     jest.mocked(rateLimit.checkAndBumpChatLimit).mockResolvedValue({ count: 1, limit: 60 });
     jest.mocked(chatRepository.getConversation).mockResolvedValue({
       id: "conversation-1",
@@ -121,14 +132,14 @@ describe("chat service", () => {
       {
         companyId: TEST_COMPANY_ID,
         conversationId: "conversation-1",
-        content: "Question?",
+        content: "finance bookkeeping concept",
         metadata: {},
       },
       gemini,
     );
 
     expect(gemini.embed).toHaveBeenCalledWith(
-      "task: question answering | query: Question?",
+      "task: question answering | query: finance bookkeeping concept",
     );
     // Knowledge is global, so book searches must NOT be scoped by company.
     expect(booksRepository.searchBookChunks).toHaveBeenCalledWith(
@@ -274,5 +285,49 @@ describe("chat service", () => {
       status: 400,
       message: "content is required",
     });
+  });
+
+  it("blocks off-topic political questions before calling Gemini", async () => {
+    await sendConversationMessage(
+      {
+        companyId: TEST_COMPANY_ID,
+        conversationId: "conversation-1",
+        content: "რას ფიქრობ სააკაშვილზე?",
+        metadata: {},
+      },
+      gemini,
+    );
+
+    expect(gemini.embed).not.toHaveBeenCalled();
+    expect(gemini.generateWithTools).not.toHaveBeenCalled();
+    expect(chatRepository.persistChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantModel: "declario-domain-guard-v1",
+        assistantContent: expect.stringContaining("ფინანს"),
+        assistantMetadata: expect.objectContaining({
+          domainGuard: expect.objectContaining({ blocked: true }),
+        }),
+        contexts: [],
+      }),
+    );
+  });
+
+  it("allows finance and tax questions through the normal chat path", async () => {
+    await sendConversationMessage(
+      {
+        companyId: TEST_COMPANY_ID,
+        conversationId: "conversation-1",
+        content: "დღგ როგორ გამოვთვალო მაისისთვის?",
+        metadata: {},
+      },
+      gemini,
+    );
+
+    expect(gemini.generateWithTools).toHaveBeenCalled();
+    expect(chatRepository.persistChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantModel: "gemini-3.1-flash-lite-preview",
+      }),
+    );
   });
 });

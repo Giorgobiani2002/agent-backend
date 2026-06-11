@@ -1,11 +1,14 @@
 export const config = {
-  geminiApiKey: process.env.GEMINI_API_KEY,
-  cartesiaApiKey: process.env.CARTESIA_API_KEY,
   openaiApiKey: process.env.OPENAI_API_KEY,
-  geminiEmbeddingModel: process.env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-2",
-  geminiChatModel: process.env.GEMINI_CHAT_MODEL ?? "gemini-3.1-flash-lite-preview",
-  geminiPlaybookModel: process.env.GEMINI_PLAYBOOK_MODEL ?? "gemini-3.1-flash-lite-preview",
-  geminiEmbeddingDimensions: Number(process.env.GEMINI_EMBEDDING_DIMENSIONS ?? 1536),
+
+  geminiEmbeddingModel: process.env.GEMINI_EMBEDDING_MODEL ?? "text-embedding-005",
+  geminiChatModel: process.env.GEMINI_CHAT_MODEL ?? "gemini-3.5-flash",
+  geminiPlaybookModel: process.env.GEMINI_PLAYBOOK_MODEL ?? "gemini-3.5-flash",
+  geminiSttModel: process.env.GEMINI_STT_MODEL ?? "gemini-3.1-flash-lite-preview",
+  geminiSttFallbackModel: process.env.GEMINI_STT_FALLBACK_MODEL ?? "gemini-2.5-flash",
+  geminiTtsModel: process.env.GEMINI_TTS_MODEL ?? "gemini-2.5-flash-tts",
+  geminiTtsVoice: process.env.GEMINI_TTS_VOICE ?? "Kore",
+  geminiEmbeddingDimensions: Number(process.env.GEMINI_EMBEDDING_DIMENSIONS ?? 768),
   geminiChatMaxOutputTokens: Number(process.env.GEMINI_CHAT_MAX_OUTPUT_TOKENS ?? 8192),
   geminiChatTemperature: Number(process.env.GEMINI_CHAT_TEMPERATURE ?? 0.55),
   ragTopK: Number(process.env.RAG_TOP_K ?? 12),
@@ -29,5 +32,15 @@ export const config = {
   s3Bucket: process.env.S3_BUCKET ?? "",
   s3AccessKeyId: process.env.S3_ACCESS_KEY_ID ?? "",
   s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? "",
+  // ── Google Cloud / Vertex AI ────────────────────────────────────────────────
+  /** GCP project ID linked to the $1,000 GenAI App Builder credit. */
+  gcpProjectId: process.env.GCP_PROJECT_ID ?? "gen-lang-client-0730194112",
+  /** Vertex AI region — global endpoint supports all latest models. */
+  gcpLocation: process.env.GCP_LOCATION ?? "global",
+  /** Service-account JSON for non-GCP hosts such as Railway. Local development can use ADC. */
+  gcpServiceAccountJson: process.env.GCP_SERVICE_ACCOUNT_JSON,
+  /** Temporary private media bucket used for Vertex video understanding. */
+  gcpMediaBucket:
+    process.env.GCP_MEDIA_BUCKET ??
+    `declario-vertex-media-${process.env.GCP_PROJECT_ID ?? "gen-lang-client-0730194112"}`,
 };
-

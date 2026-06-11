@@ -293,11 +293,36 @@ export async function searchBookChunks(
         books.title AS book_title,
         books.metadata AS book_metadata,
         1 - (book_chunks.embedding <=> $1::vector) AS similarity,
-        row_number() OVER (ORDER BY book_chunks.embedding <=> $1::vector)::integer AS rank
+        row_number() OVER (
+          ORDER BY
+            (book_chunks.embedding <=> $1::vector) *
+            CASE
+              WHEN coalesce((books.metadata->>'authorityRank')::integer, 0) >= 90 THEN 0.55
+              WHEN coalesce((books.metadata->>'authorityRank')::integer, 0) >= 70 THEN 0.72
+              WHEN coalesce((books.metadata->>'authorityRank')::integer, 0) >= 50 THEN 0.88
+              ELSE 1.0
+            END
+        )::integer AS rank
       FROM book_chunks
       JOIN books ON books.id = book_chunks.book_id
       WHERE books.status = 'ready'
-      ORDER BY book_chunks.embedding <=> $1::vector
+        AND books.metadata->>'rightsStatus' = 'approved'
+        AND (
+          nullif(books.metadata->>'effectiveFrom', '') IS NULL
+          OR (books.metadata->>'effectiveFrom')::date <= CURRENT_DATE
+        )
+        AND (
+          nullif(books.metadata->>'effectiveTo', '') IS NULL
+          OR (books.metadata->>'effectiveTo')::date >= CURRENT_DATE
+        )
+      ORDER BY
+        (book_chunks.embedding <=> $1::vector) *
+        CASE
+          WHEN coalesce((books.metadata->>'authorityRank')::integer, 0) >= 90 THEN 0.55
+          WHEN coalesce((books.metadata->>'authorityRank')::integer, 0) >= 70 THEN 0.72
+          WHEN coalesce((books.metadata->>'authorityRank')::integer, 0) >= 50 THEN 0.88
+          ELSE 1.0
+        END
       LIMIT $2
     `,
     [toPgVector(embedding), limit],
@@ -319,13 +344,19 @@ export async function searchBookChunksWithNeighbors(
   // ranking without hard-filtering them out (so we degrade gracefully on
   // empty tag taxonomies). The match is case-insensitive substring.
   const kind = (taskKind ?? "").trim().toLowerCase();
+  const authorityBoostExpr = `CASE
+         WHEN coalesce((books.metadata->>'authorityRank')::integer, 0) >= 90 THEN 0.55
+         WHEN coalesce((books.metadata->>'authorityRank')::integer, 0) >= 70 THEN 0.72
+         WHEN coalesce((books.metadata->>'authorityRank')::integer, 0) >= 50 THEN 0.88
+         ELSE 1.0
+       END`;
   const tagBoostExpr = kind
     ? `CASE WHEN
          lower(coalesce(books.metadata->>'topic','')) LIKE '%' || $5 || '%'
          OR lower(coalesce(books.metadata->>'tags','')) LIKE '%' || $5 || '%'
          OR lower(books.title) LIKE '%' || $5 || '%'
-       THEN 0.6 ELSE 1.0 END`
-    : `1.0`;
+       THEN 0.6 ELSE 1.0 END * ${authorityBoostExpr}`
+    : authorityBoostExpr;
   const params: unknown[] = [toPgVector(embedding), seedLimit, neighborWindow, maxContextChunks];
   if (kind) params.push(kind);
 
@@ -341,6 +372,15 @@ export async function searchBookChunksWithNeighbors(
         FROM book_chunks
         JOIN books ON books.id = book_chunks.book_id
         WHERE books.status = 'ready'
+          AND books.metadata->>'rightsStatus' = 'approved'
+          AND (
+            nullif(books.metadata->>'effectiveFrom', '') IS NULL
+            OR (books.metadata->>'effectiveFrom')::date <= CURRENT_DATE
+          )
+          AND (
+            nullif(books.metadata->>'effectiveTo', '') IS NULL
+            OR (books.metadata->>'effectiveTo')::date >= CURRENT_DATE
+          )
         ORDER BY (book_chunks.embedding <=> $1::vector) * ${tagBoostExpr}
         LIMIT $2
       ),
@@ -365,6 +405,7 @@ export async function searchBookChunksWithNeighbors(
             GREATEST(seeds.chunk_index - $3, 0)
             AND seeds.chunk_index + $3
         WHERE books.status = 'ready'
+          AND books.metadata->>'rightsStatus' = 'approved'
         GROUP BY
           book_chunks.id,
           book_chunks.book_id,
@@ -420,6 +461,15 @@ export async function loadChunksForBooks(bookIds: string[]): Promise<BookChunkRo
       JOIN books ON books.id = book_chunks.book_id
       WHERE book_chunks.book_id = ANY($1::uuid[])
         AND books.status = 'ready'
+        AND books.metadata->>'rightsStatus' = 'approved'
+        AND (
+          nullif(books.metadata->>'effectiveFrom', '') IS NULL
+          OR (books.metadata->>'effectiveFrom')::date <= CURRENT_DATE
+        )
+        AND (
+          nullif(books.metadata->>'effectiveTo', '') IS NULL
+          OR (books.metadata->>'effectiveTo')::date >= CURRENT_DATE
+        )
       ORDER BY book_chunks.book_id, book_chunks.chunk_index
     `,
     [bookIds],

@@ -12,6 +12,7 @@ import playbooksRouter from "./routes/playbooks";
 import schedulesRouter from "./routes/schedules";
 import alertsRouter from "./routes/alerts";
 import internalRouter from "./routes/internal";
+import sttRouter from "./routes/stt";
 import { startScheduler } from "./services/scheduler";
 import { initializePgVector } from "./db";
 import { tenantMiddleware } from "./utils/http";
@@ -70,6 +71,7 @@ app.use("/alerts", tenantMiddleware, alertsRouter);
 // tenantMiddleware enforces X-Internal-Secret + X-Company-Id which is
 // exactly what we want for service-to-service auth.
 app.use("/internal", tenantMiddleware, internalRouter);
+app.use("/stt", tenantMiddleware, sttRouter);
 
 // Catch-all error handler — captures anything routes throw without
 // their own try/catch and ships it to Sentry with tenant context.
@@ -99,8 +101,8 @@ if (require.main === module) {
     .then(() => {
       startStalledScanner();
       startScheduler({ spawnBulkWorker });
-      app.listen(PORT, () => {
-        console.log(`Backend running on http://localhost:${PORT}`);
+      app.listen(PORT as number, "0.0.0.0", () => {
+        console.log(`Backend running on http://0.0.0.0:${PORT}`);
       });
     })
     .catch((error) => {

@@ -1349,9 +1349,13 @@ router.post("/run", async (req: Request, res: Response) => {
   const proc = spawn(PYTHON_BIN, args, {
     env: {
       ...process.env,
-      // Explicitly forward API keys so the Python agent always has them,
-      // even if it can't locate a .env file on its own.
-      ...(config.geminiApiKey ? { GEMINI_API_KEY: config.geminiApiKey } : {}),
+      // Explicitly forward Vertex configuration so the Python agent can use
+      // the same credit-backed GCP project when spawned locally.
+      GCP_PROJECT_ID: config.gcpProjectId,
+      GCP_LOCATION: config.gcpLocation,
+      ...(config.gcpServiceAccountJson
+        ? { GCP_SERVICE_ACCOUNT_JSON: config.gcpServiceAccountJson }
+        : {}),
       ...(process.env.ANTHROPIC_API_KEY ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY } : {}),
       BACKEND_URL: `http://localhost:${process.env.PORT ?? 3001}`,
       RUN_ID: runId,
@@ -1572,7 +1576,11 @@ export function spawnBulkWorker(
     const proc = spawn(PYTHON_BIN, args, {
       env: {
         ...process.env,
-        ...(config.geminiApiKey ? { GEMINI_API_KEY: config.geminiApiKey } : {}),
+        GCP_PROJECT_ID: config.gcpProjectId,
+        GCP_LOCATION: config.gcpLocation,
+        ...(config.gcpServiceAccountJson
+          ? { GCP_SERVICE_ACCOUNT_JSON: config.gcpServiceAccountJson }
+          : {}),
         ...(process.env.ANTHROPIC_API_KEY ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY } : {}),
         BACKEND_URL: `http://localhost:${process.env.PORT ?? 3001}`,
         AGENT_HEADLESS: headless,

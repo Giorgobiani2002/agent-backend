@@ -19,6 +19,7 @@ import {
   parsePdfFile,
   titleFromPdfPath,
 } from "../utils/pdf";
+import { assertApprovedKnowledgeMetadata } from "./corpus-sources";
 
 // Knowledge is GLOBAL across all companies — only platform admins seed it.
 // The chat brain (RAG over books/book_chunks) gives every company the same
@@ -54,6 +55,7 @@ function manualBookMetadata(
     ...metadata,
     source: "api",
     rawText,
+    rightsStatus: metadata.rightsStatus ?? "pending",
   };
 }
 
@@ -195,14 +197,24 @@ export async function createManualBook(
   gemini: GeminiService = geminiService,
 ) {
   const text = input.text.trim();
+  const metadata = manualBookMetadata(input.metadata ?? {}, text);
+  if (metadata.rightsStatus === "approved") {
+    assertApprovedKnowledgeMetadata(metadata);
+  }
 
   return ingestBook(
     {
       title: input.title,
       author: input.author,
       text,
-      metadata: manualBookMetadata(input.metadata ?? {}, text),
-      chunkMetadata: { source: "api" },
+      metadata,
+      chunkMetadata: {
+        source: "api",
+        rightsStatus: metadata.rightsStatus,
+        license: metadata.license,
+        attribution: metadata.attribution,
+        sourceUrl: metadata.sourceUrl,
+      },
     },
     gemini,
   );

@@ -12,22 +12,26 @@ Purpose: this document tells Declario's structured agents which source families 
    Use for declaration forms, return filing procedure, tax administration workflows, applications, annexes, and procedural implementation details.
    Source: https://www.matsne.gov.ge/en/document/view/1167887
 
-3. Revenue Service / rs.ge operational materials.
+3. Law of Georgia on Funded Pensions.
+   Use for employee, employer, and State pension contribution rules, participant status, contribution base, and pension-specific payroll obligations.
+   Source: https://matsne.gov.ge/en/document/view/4280127
+
+4. Revenue Service / rs.ge operational materials.
    Use for portal-specific procedures, e-invoice, waybill, taxpayer information, VAT declaration, payment, and service-user behavior.
    Source: https://www.rs.ge and related rs.ge service portals.
 
-4. SARAS standards and accounting law.
+5. SARAS standards and accounting law.
    Use for bookkeeping and financial reporting framework selection: IFRS, IFRS for SMEs, Category IV entity standard, annual reporting duties, and entity size-category rules.
    Sources:
    - https://www.saras.gov.ge/en/Home/IfrsForSmes
    - https://matsne.gov.ge/ka/document/view/3311504
    - https://www.saras.gov.ge/Content/files/meotxe-kategoriis-sawarmoebis-finansuri.pdf
 
-5. IFRS Foundation materials.
+6. IFRS Foundation materials.
    Use for global IFRS for SMEs framework, but do not override Georgian tax law or SARAS adoption rules. The 2025 IFRS for SMEs edition is effective for periods beginning on or after 2027-01-01, with early adoption possible where allowed.
    Source: https://www.ifrs.org/content/ifrs/home/issued-standards/ifrs-for-smes.html
 
-6. rs-mcp repository documentation.
+7. rs-mcp repository documentation.
    Use for tool names, CLI commands, required inputs, destructive-operation safety, and mapping structured tax decisions into executable rs.ge actions.
    Source: https://github.com/Parsa-29/rs-mcp
 

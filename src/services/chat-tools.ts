@@ -83,6 +83,11 @@ function num(v: unknown): number | undefined {
   return undefined;
 }
 
+function int(v: unknown): number | undefined {
+  const n = num(v);
+  return typeof n === "number" && Number.isInteger(n) ? n : undefined;
+}
+
 async function safeRsGet<T>(
   path: string,
   ctx: ToolCallContext,
@@ -288,6 +293,69 @@ export const CHAT_TOOLS: ChatTool[] = [
     },
   },
   {
+    name: "file_payroll",
+    description:
+      "Prepare AND upload/file the company's monthly payroll declaration on rs.ge from declario's employee records. Use when the user says 'ხელფასები ამიტვირთე/გააგზავნე/დააფიქსირე' for a period and means filing, not merely importing an employee list. STRICT TWO-STEP SAFETY: (1) call without confirm to prepare the payroll run and return employee count, gross, income tax, pension, net and warnings; show that exact preview and ask for explicit approval. (2) Call again with confirm=true only after the user clearly approves this specific period and totals in the conversation. Never auto-confirm. The browser playbook runs halt-on-dangerous, fills rs.ge and pauses before the final irreversible submit.",
+    parameters: {
+      type: "object",
+      properties: {
+        year: { type: "integer", description: "payroll period year; defaults to current" },
+        month: {
+          type: "integer",
+          minimum: 1,
+          maximum: 12,
+          description: "payroll period month 1-12; defaults to current",
+        },
+        confirm: {
+          type: "boolean",
+          description:
+            "Set true only after the user explicitly approves filing this exact payroll preview. Omit/false to prepare only.",
+        },
+        payroll_run_id: {
+          type: "string",
+          description: "Required with confirm=true; returned by the prepare step.",
+        },
+        approval_id: {
+          type: "string",
+          description: "Required with confirm=true; returned by the prepare step.",
+        },
+        snapshot_hash: {
+          type: "string",
+          description: "Required with confirm=true; returned by the prepare step approval.",
+        },
+      },
+    },
+    async handler(ctx, args) {
+      const year = num(args.year);
+      const month = num(args.month);
+      if (args.confirm === true) {
+        const payrollRunId = str(args.payroll_run_id);
+        const approvalId = str(args.approval_id);
+        const snapshotHash = str(args.snapshot_hash);
+        if (!payrollRunId || !approvalId || !snapshotHash) {
+          return {
+            error:
+              "payroll_run_id, approval_id and snapshot_hash from the prepared preview are required",
+          };
+        }
+        return safeRsPost(`/internal/tools/payroll/file`, ctx, {
+          payroll_run_id: payrollRunId,
+          approval_id: approvalId,
+          snapshot_hash: snapshotHash,
+        });
+      }
+      const prepared = await safeRsPost(`/internal/tools/payroll/prepare`, ctx, {
+        year,
+        month,
+      });
+      return {
+        requiresConfirmation: true,
+        prepared,
+        note: "Payroll prepared but NOT filed. Show the exact period, totals, employee count, warnings and approval expiry; ask the user to approve before calling file_payroll with confirm=true and the returned payroll_run_id, approval.id and approval.snapshot_hash.",
+      };
+    },
+  },
+  {
     name: "file_vat_return",
     description:
       "Prepare AND file the company's VAT (დღგ) declaration for a period on rs.ge. Use when the user asks to FILE/submit/'დააფიქსირე/გააგზავნე' their VAT. TWO-STEP SAFETY PROTOCOL: (1) call WITHOUT confirm first — it prepares the draft and returns the figures; show them and ask the user to explicitly approve filing THIS declaration. (2) Call again with confirm=true ONLY AFTER the user clearly says yes in this conversation. NEVER set confirm=true on your own. Filing dispatches the rs.ge browser playbook in halt-on-dangerous mode (it fills the form and stops before the final submit for the user to finalize), so nothing is submitted silently.",
@@ -318,6 +386,563 @@ export const CHAT_TOOLS: ChatTool[] = [
         prepared,
         note: "Draft prepared but NOT filed. Show the figures and ask the user to confirm; only then call file_vat_return again with confirm=true.",
       };
+    },
+  },
+  {
+    name: "preview_waybills_from_orders",
+    description:
+      "Preview the waybills (ზედნადები) that can be built from the company's orders for a date WITHOUT sending anything to rs.ge. Returns each buildable waybill (buyer, goods count, amount, warnings), existing drafts an upload would send, which orders are already sent, and totals. Use for a no-send dry run.",
+    parameters: {
+      type: "object",
+      properties: {
+        date: {
+          type: "string",
+          description: "YYYY-MM-DD; orders are matched by their created date (UTC day)",
+        },
+        orderIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "optional explicit order ids instead of a whole day",
+        },
+      },
+    },
+    async handler(ctx, args) {
+      const date = str(args.date);
+      const orderIds = Array.isArray(args.orderIds)
+        ? (args.orderIds as unknown[])
+            .map((x) => str(x))
+            .filter((x): x is string => Boolean(x))
+        : undefined;
+      if (!date && (!orderIds || orderIds.length === 0)) {
+        return { error: "Provide a date (YYYY-MM-DD) or orderIds" };
+      }
+      return safeRsGet(`/internal/tools/waybills/preview-from-orders`, ctx, {
+        date,
+        orderIds: orderIds?.join(","),
+      });
+    },
+  },
+  {
+    name: "upload_waybills_for_date",
+    description:
+      "Create AND send waybills (ზედნადები) to rs.ge from the company's orders for a date ('ატვირთე/გააგზავნე ზედნადები [date]-ის შეკვეთებზე'). STRICT TWO-STEP SAFETY: (1) call WITHOUT confirm — it returns the buildable-waybill preview (per order: buyer, goods, amount, warnings), existing drafts that will be sent, orders already sent, and totals; show this and ask the user to approve sending. (2) Call again with confirm=true ONLY after the user explicitly approves in this conversation. Sending is IRREVERSIBLE on rs.ge. Never set confirm=true on your own. Safe to re-run: already-sent orders are skipped and existing drafts are sent, not duplicated.",
+    parameters: {
+      type: "object",
+      properties: {
+        date: {
+          type: "string",
+          description: "YYYY-MM-DD; orders are matched by their created date (UTC day)",
+        },
+        orderIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "optional explicit order ids instead of a whole day",
+        },
+        confirm: {
+          type: "boolean",
+          description:
+            "true ONLY after the user explicitly approves sending this exact preview. Omit/false to preview only.",
+        },
+      },
+    },
+    async handler(ctx, args) {
+      const date = str(args.date);
+      const orderIds = Array.isArray(args.orderIds)
+        ? (args.orderIds as unknown[])
+            .map((x) => str(x))
+            .filter((x): x is string => Boolean(x))
+        : undefined;
+      if (!date && (!orderIds || orderIds.length === 0)) {
+        return { error: "Provide a date (YYYY-MM-DD) or orderIds" };
+      }
+      if (args.confirm === true) {
+        return safeRsPost(`/internal/tools/waybills/upload-from-orders`, ctx, {
+          date,
+          orderIds,
+        });
+      }
+      const prepared = await safeRsGet(
+        `/internal/tools/waybills/preview-from-orders`,
+        ctx,
+        { date, orderIds: orderIds?.join(",") },
+      );
+      return {
+        requiresConfirmation: true,
+        prepared,
+        note: "Waybills built but NOT sent. Show the buyers, goods, amounts, totals and any warnings; note which orders are skipped (already sent) and which existing drafts will be sent. Only call upload_waybills_for_date again with confirm=true after the user explicitly approves sending.",
+      };
+    },
+  },
+  {
+    name: "send_waybill",
+    description:
+      "Send/activate ONE already-created waybill on rs.ge by its numeric rs.ge waybill id. IRREVERSIBLE — queues for human approval unless the gate clears it. For a whole day of orders use upload_waybills_for_date instead.",
+    parameters: {
+      type: "object",
+      properties: { waybillId: { type: "integer", description: "numeric rs.ge waybill id" } },
+      required: ["waybillId"],
+    },
+    async handler(ctx, args) {
+      const waybillId = num(args.waybillId);
+      if (typeof waybillId !== "number") {
+        return { error: "waybillId (numeric rs.ge id) is required" };
+      }
+      return runWriteTool(
+        {
+          name: "send_waybill",
+          describe: (a) => `send waybill ${a.waybillId} to rs.ge`,
+          reversible: () => false,
+          async execute(a, c) {
+            return rsServerClient.post(
+              `/internal/tools/waybills/${a.waybillId}/send`,
+              { companyId: c.companyId, userId: c.userId, body: {} },
+            );
+          },
+        },
+        { waybillId },
+        ctx,
+      );
+    },
+  },
+  {
+    name: "confirm_waybill",
+    description:
+      "Confirm receipt of a waybill on rs.ge (buyer side) by its numeric rs.ge waybill id. IRREVERSIBLE — queues for human approval unless the gate clears it.",
+    parameters: {
+      type: "object",
+      properties: { waybillId: { type: "integer", description: "numeric rs.ge waybill id" } },
+      required: ["waybillId"],
+    },
+    async handler(ctx, args) {
+      const waybillId = num(args.waybillId);
+      if (typeof waybillId !== "number") {
+        return { error: "waybillId (numeric rs.ge id) is required" };
+      }
+      return runWriteTool(
+        {
+          name: "confirm_waybill",
+          describe: (a) => `confirm receipt of waybill ${a.waybillId}`,
+          reversible: () => false,
+          async execute(a, c) {
+            return rsServerClient.post(
+              `/internal/tools/waybills/${a.waybillId}/confirm`,
+              { companyId: c.companyId, userId: c.userId, body: {} },
+            );
+          },
+        },
+        { waybillId },
+        ctx,
+      );
+    },
+  },
+  {
+    name: "reject_waybill",
+    description:
+      "Reject a waybill on rs.ge (buyer side) by its numeric rs.ge waybill id. IRREVERSIBLE — queues for human approval unless the gate clears it.",
+    parameters: {
+      type: "object",
+      properties: { waybillId: { type: "integer", description: "numeric rs.ge waybill id" } },
+      required: ["waybillId"],
+    },
+    async handler(ctx, args) {
+      const waybillId = num(args.waybillId);
+      if (typeof waybillId !== "number") {
+        return { error: "waybillId (numeric rs.ge id) is required" };
+      }
+      return runWriteTool(
+        {
+          name: "reject_waybill",
+          describe: (a) => `reject waybill ${a.waybillId}`,
+          reversible: () => false,
+          async execute(a, c) {
+            return rsServerClient.post(
+              `/internal/tools/waybills/${a.waybillId}/reject`,
+              { companyId: c.companyId, userId: c.userId, body: {} },
+            );
+          },
+        },
+        { waybillId },
+        ctx,
+      );
+    },
+  },
+  {
+    name: "close_waybill",
+    description:
+      "Close/finalize a waybill on rs.ge (mark delivery complete) by its numeric rs.ge waybill id. IRREVERSIBLE — queues for human approval unless the gate clears it.",
+    parameters: {
+      type: "object",
+      properties: { waybillId: { type: "integer", description: "numeric rs.ge waybill id" } },
+      required: ["waybillId"],
+    },
+    async handler(ctx, args) {
+      const waybillId = num(args.waybillId);
+      if (typeof waybillId !== "number") {
+        return { error: "waybillId (numeric rs.ge id) is required" };
+      }
+      return runWriteTool(
+        {
+          name: "close_waybill",
+          describe: (a) => `close waybill ${a.waybillId}`,
+          reversible: () => false,
+          async execute(a, c) {
+            return rsServerClient.post(
+              `/internal/tools/waybills/${a.waybillId}/close`,
+              { companyId: c.companyId, userId: c.userId, body: {} },
+            );
+          },
+        },
+        { waybillId },
+        ctx,
+      );
+    },
+  },
+  {
+    name: "delete_waybill",
+    description:
+      "Delete a waybill on rs.ge by its numeric rs.ge waybill id. Deleting an UNSENT draft is low-risk and auto-approved; deleting anything already sent is irreversible and queues for human approval.",
+    parameters: {
+      type: "object",
+      properties: { waybillId: { type: "integer", description: "numeric rs.ge waybill id" } },
+      required: ["waybillId"],
+    },
+    async handler(ctx, args) {
+      const waybillId = num(args.waybillId);
+      if (typeof waybillId !== "number") {
+        return { error: "waybillId (numeric rs.ge id) is required" };
+      }
+      return runWriteTool(
+        {
+          name: "delete_waybill",
+          describe: (a) => `delete waybill ${a.waybillId} on rs.ge`,
+          reversible: () => false,
+          async autoApprove(a, c) {
+            // Auto-approve only when the local mirror shows an UNSENT draft.
+            const res = await safeRsGet<{
+              waybill: { sent_at?: string | null } | null;
+            }>(`/internal/tools/waybills/${a.waybillId}`, c);
+            if (res && typeof res === "object" && "waybill" in res) {
+              const wb = (res as { waybill: { sent_at?: string | null } | null })
+                .waybill;
+              return Boolean(wb) && !wb?.sent_at;
+            }
+            return false;
+          },
+          async execute(a, c) {
+            return rsServerClient.post(
+              `/internal/tools/waybills/${a.waybillId}/delete`,
+              { companyId: c.companyId, userId: c.userId, body: {} },
+            );
+          },
+        },
+        { waybillId },
+        ctx,
+      );
+    },
+  },
+  {
+    name: "search_invoices",
+    description:
+      "List the company's invoices (ანგარიშ-ფაქტურა) from declario's local mirror, newest first — fast, but only as fresh as the last sync. isSale=true for invoices the company issued (output VAT), false for received ones (input VAT). For the live rs.ge view use list_live_invoices.",
+    parameters: {
+      type: "object",
+      properties: {
+        isSale: { type: "boolean", description: "true=issued/sales, false=received/purchases" },
+        orderId: { type: "string" },
+        limit: { type: "integer", minimum: 1, maximum: 200 },
+      },
+    },
+    async handler(ctx, args) {
+      return safeRsGet(`/internal/tools/invoices`, ctx, {
+        isSale:
+          typeof args.isSale === "boolean" ? String(args.isSale) : undefined,
+        orderId: str(args.orderId),
+        limit: num(args.limit),
+      });
+    },
+  },
+  {
+    name: "list_live_invoices",
+    description:
+      "Query rs.ge DIRECTLY for the company's invoices — side='seller' for issued, side='buyer' for received. Reflects rs.ge right now (statuses, invoices waiting for the company's reaction), unlike the local mirror. Dates are YYYY-MM-DD; op_from/op_to filter by operation date, reg_from/reg_to by registration date.",
+    parameters: {
+      type: "object",
+      properties: {
+        side: { type: "string", enum: ["seller", "buyer"] },
+        op_from: { type: "string" },
+        op_to: { type: "string" },
+        reg_from: { type: "string" },
+        reg_to: { type: "string" },
+        tin: { type: "string", description: "counterparty TIN filter" },
+        invoice_no: { type: "string" },
+        limit: { type: "integer", minimum: 1, maximum: 200 },
+      },
+      required: ["side"],
+    },
+    async handler(ctx, args) {
+      const side = str(args.side);
+      if (side !== "seller" && side !== "buyer") {
+        return { error: "side must be 'seller' or 'buyer'" };
+      }
+      return safeRsGet(`/internal/tools/invoices/live`, ctx, {
+        side,
+        op_from: str(args.op_from),
+        op_to: str(args.op_to),
+        reg_from: str(args.reg_from),
+        reg_to: str(args.reg_to),
+        tin: str(args.tin),
+        invoice_no: str(args.invoice_no),
+        limit: num(args.limit),
+      });
+    },
+  },
+  {
+    name: "get_invoice",
+    description:
+      "Look up one invoice. Pass the numeric rs.ge invoice id to fetch the LIVE invoice with its line items from rs.ge; pass the internal UUID to fetch the local mirror row.",
+    parameters: {
+      type: "object",
+      properties: {
+        invoiceId: { type: "string", description: "numeric rs.ge id or internal UUID" },
+      },
+      required: ["invoiceId"],
+    },
+    async handler(ctx, args) {
+      const id = str(args.invoiceId);
+      if (!id) return { error: "invoiceId is required" };
+      const numeric = Number(id);
+      if (Number.isFinite(numeric) && numeric > 0) {
+        return safeRsGet(
+          `/internal/tools/invoices/${encodeURIComponent(id)}/details`,
+          ctx,
+        );
+      }
+      return safeRsGet(`/internal/tools/invoices/${encodeURIComponent(id)}`, ctx);
+    },
+  },
+  {
+    name: "sync_invoices",
+    description:
+      "Pull the company's seller AND buyer invoices for a period from rs.ge into declario's mirror. Idempotent refresh — run it before drafting/auditing VAT if the user doubts the figures, or when the mirror looks stale. This is what makes input VAT (purchases) real.",
+    parameters: {
+      type: "object",
+      properties: {
+        year: { type: "integer", description: "period year; defaults to current" },
+        month: { type: "integer", minimum: 1, maximum: 12, description: "period month 1-12; defaults to current" },
+      },
+    },
+    async handler(ctx, args) {
+      return safeRsPost(`/internal/tools/invoices/sync`, ctx, {
+        year: num(args.year),
+        month: num(args.month),
+      });
+    },
+  },
+  {
+    name: "preview_invoices_from_orders",
+    description:
+      "Preview the tax invoices (ანგარიშ-ფაქტურა) that can be created from the company's orders for a date WITHOUT touching rs.ge. Returns each invoiceable order (buyer, totals incl. VAT split, the waybill it will reference, warnings), which orders are already invoiced, and totals.",
+    parameters: {
+      type: "object",
+      properties: {
+        date: {
+          type: "string",
+          description: "YYYY-MM-DD; orders are matched by their created date (UTC day)",
+        },
+        orderIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "optional explicit order ids instead of a whole day",
+        },
+      },
+    },
+    async handler(ctx, args) {
+      const date = str(args.date);
+      const orderIds = Array.isArray(args.orderIds)
+        ? (args.orderIds as unknown[])
+            .map((x) => str(x))
+            .filter((x): x is string => Boolean(x))
+        : undefined;
+      if (!date && (!orderIds || orderIds.length === 0)) {
+        return { error: "Provide a date (YYYY-MM-DD) or orderIds" };
+      }
+      return safeRsGet(`/internal/tools/invoices/preview-from-orders`, ctx, {
+        date,
+        orderIds: orderIds?.join(","),
+      });
+    },
+  },
+  {
+    name: "upload_invoices_for_date",
+    description:
+      "Issue/register tax invoices (ანგარიშ-ფაქტურა) on rs.ge from the company's orders for a date ('ამიწერე/ატვირთე ფაქტურები [date]-ის შეკვეთებზე'). This creates the rs.ge invoices with line items and the linked waybill reference; it does NOT perform any separate buyer-present/send lifecycle action. STRICT TWO-STEP SAFETY: (1) call WITHOUT confirm — it returns the per-order preview (buyer, totals, VAT, linked waybill, warnings), skipped orders, and confirmation_order_ids; show it and ask the user to approve. (2) Call again with confirm=true ONLY after the user explicitly approves in this conversation, passing orderIds from confirmation_order_ids so the issued set exactly matches the preview. Issuing a tax invoice is legally binding. Never set confirm=true on your own. Safe to re-run: already-invoiced orders are skipped.",
+    parameters: {
+      type: "object",
+      properties: {
+        date: {
+          type: "string",
+          description: "YYYY-MM-DD; orders are matched by their created date (UTC day)",
+        },
+        orderIds: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "optional explicit order ids instead of a whole day; REQUIRED with confirm=true, copied from the preview's confirmation_order_ids",
+        },
+        confirm: {
+          type: "boolean",
+          description:
+            "true ONLY after the user explicitly approves issuing the previewed invoices. Omit/false to preview only.",
+        },
+      },
+    },
+    async handler(ctx, args) {
+      const date = str(args.date);
+      const orderIds = Array.isArray(args.orderIds)
+        ? (args.orderIds as unknown[])
+            .map((x) => str(x))
+            .filter((x): x is string => Boolean(x))
+        : undefined;
+      if (!date && (!orderIds || orderIds.length === 0)) {
+        return { error: "Provide a date (YYYY-MM-DD) or orderIds" };
+      }
+      if (args.confirm === true) {
+        if (!orderIds || orderIds.length === 0) {
+          return {
+            error:
+              "confirm=true requires orderIds copied from the preview's confirmation_order_ids; do not confirm invoice issuance by date alone.",
+          };
+        }
+        return safeRsPost(`/internal/tools/invoices/upload-from-orders`, ctx, {
+          date,
+          orderIds,
+        });
+      }
+      const prepared = await safeRsGet(
+        `/internal/tools/invoices/preview-from-orders`,
+        ctx,
+        { date, orderIds: orderIds?.join(",") },
+      );
+      return {
+        requiresConfirmation: true,
+        prepared,
+        note: "Invoices prepared but NOT created on rs.ge. Show buyers, totals (gross/taxable/VAT), linked waybills and warnings; note which orders are skipped (already invoiced). If the user explicitly approves, call upload_invoices_for_date again with confirm=true and pass orderIds from prepared.confirmation_order_ids; never confirm by date alone.",
+      };
+    },
+  },
+  {
+    name: "accept_invoice",
+    description:
+      "Accept/confirm a RECEIVED invoice on rs.ge by its numeric id (purchase invoices count toward input VAT only once accepted). Requires the numeric rs.ge status code to set — read the invoice first (get_invoice / list_live_invoices) if unsure. IRREVERSIBLE — always queues for human approval.",
+    parameters: {
+      type: "object",
+      properties: {
+        invoiceId: { type: "integer", description: "numeric rs.ge invoice id" },
+        status: { type: "integer", description: "rs.ge status code to confirm with" },
+      },
+      required: ["invoiceId", "status"],
+    },
+    async handler(ctx, args) {
+      const invoiceId = int(args.invoiceId);
+      const status = int(args.status);
+      if (typeof invoiceId !== "number" || typeof status !== "number") {
+        return { error: "invoiceId and status (integer) are required" };
+      }
+      return runWriteTool(
+        {
+          name: "accept_invoice",
+          describe: (a) => `accept invoice ${a.invoiceId} (status ${a.status})`,
+          reversible: () => false,
+          async execute(a, c) {
+            return rsServerClient.post(
+              `/internal/tools/invoices/${a.invoiceId}/accept`,
+              { companyId: c.companyId, userId: c.userId, body: { status: a.status } },
+            );
+          },
+        },
+        { invoiceId, status },
+        ctx,
+      );
+    },
+  },
+  {
+    name: "reject_invoice",
+    description:
+      "Reject a RECEIVED invoice on rs.ge by its numeric id, with a reason the counterparty will see. IRREVERSIBLE — always queues for human approval.",
+    parameters: {
+      type: "object",
+      properties: {
+        invoiceId: { type: "integer", description: "numeric rs.ge invoice id" },
+        reason: { type: "string", description: "rejection reason shown to the counterparty" },
+      },
+      required: ["invoiceId", "reason"],
+    },
+    async handler(ctx, args) {
+      const invoiceId = int(args.invoiceId);
+      const reason = str(args.reason);
+      if (typeof invoiceId !== "number" || !reason) {
+        return { error: "invoiceId and reason are required" };
+      }
+      return runWriteTool(
+        {
+          name: "reject_invoice",
+          describe: (a) => `reject invoice ${a.invoiceId} (${a.reason})`,
+          reversible: () => false,
+          async execute(a, c) {
+            return rsServerClient.post(
+              `/internal/tools/invoices/${a.invoiceId}/reject`,
+              { companyId: c.companyId, userId: c.userId, body: { reason: a.reason } },
+            );
+          },
+        },
+        { invoiceId, reason },
+        ctx,
+      );
+    },
+  },
+  {
+    name: "correct_invoice",
+    description:
+      "Create a CORRECTION invoice (კორექტირება) for an issued invoice on rs.ge. correctionType: 1=cancel the operation, 2=change operation type, 3=price/compensation change, 4=goods return. IRREVERSIBLE and tax-sensitive — always queues for human approval.",
+    parameters: {
+      type: "object",
+      properties: {
+        invoiceId: { type: "integer", description: "numeric rs.ge invoice id of the ORIGINAL invoice" },
+        correctionType: { type: "integer", minimum: 1, maximum: 4 },
+      },
+      required: ["invoiceId", "correctionType"],
+    },
+    async handler(ctx, args) {
+      const invoiceId = int(args.invoiceId);
+      const correctionType = int(args.correctionType);
+      if (
+        typeof invoiceId !== "number" ||
+        typeof correctionType !== "number" ||
+        correctionType < 1 ||
+        correctionType > 4
+      ) {
+        return { error: "invoiceId and correctionType (integer 1-4) are required" };
+      }
+      return runWriteTool(
+        {
+          name: "correct_invoice",
+          describe: (a) =>
+            `create correction invoice (type ${a.correctionType}) for invoice ${a.invoiceId}`,
+          reversible: () => false,
+          async execute(a, c) {
+            return rsServerClient.post(
+              `/internal/tools/invoices/${a.invoiceId}/correct`,
+              {
+                companyId: c.companyId,
+                userId: c.userId,
+                body: { k_type: a.correctionType },
+              },
+            );
+          },
+        },
+        { invoiceId, correctionType },
+        ctx,
+      );
     },
   },
   {
@@ -992,11 +1617,15 @@ export function chatToolSystemInstruction(): string {
     (t) => `- ${t.name}: ${t.description}`,
   ).join("\n");
   return [
+    "Scope policy: only help with finance, accounting, bookkeeping, taxes, payroll, VAT, profit tax, invoices, waybills, bank statements, declarations, rs.ge, business operations data, uploaded financial documents/spreadsheets, and Declario product workflows. If the user asks about politics, public figures, entertainment, gossip, culture-war/provocative topics, general trivia, medical, coding, or any other off-topic subject, do not answer the substance. Briefly say you can help with finance/accounting/tax/rs.ge topics and ask them to reframe it in that context.",
     "You are declario's chat assistant for accountants and SMB owners.",
     "When the user asks about live data — a specific waybill, declaration, pipeline run, bulk run, order, schedule, playbook, or AI run, or about why something failed — CALL ONE OF THE TOOLS BELOW first. Do not fabricate IDs, statuses, or error reasons. If you need data, ask the tool; if the tool returns nothing or an error, say so plainly.",
     "Computing or verifying THE COMPANY'S OWN figures for a period is LIVE DATA, not a general question — call the matching tool and base every number strictly on its result, reading out any warnings or discrepancies: `draft_vat_return` for VAT (დღგ); `draft_payroll` for payroll/salaries (ხელფასები — gross / income tax 20% / pension); `audit_vat_submission` to CHECK/VERIFY an already-prepared or submitted VAT declaration against current data ('გადაამოწმე ჩემი ატვირთული დღგ', 'is my submitted VAT correct'). Do NOT call these for GENERAL questions — the rate, definitions, how a rule works, or how to fill a form — answer those from the knowledge base, citing the relevant articles. There is no computation tool yet for profit tax or the small-business 1% tax — explain those from the knowledge base and say a calculation tool isn't available yet.",
-    "To add/update employees and their salaries from a list the user gives ('ამ თანამშრომლების ხელფასები ამიტვირთე/დაამატე', pasted text or a parsed salary sheet), call `import_employees` with the structured list, then offer to call `draft_payroll`.",
+    "Disambiguate Georgian salary requests carefully. If the user provides a pasted/parsed employee list and asks to add/import salaries, call `import_employees`, then `draft_payroll`. If the employee records already exist and the user asks to upload/file/send payroll for a period ('ხელფასები ამიტვირთე/გააგზავნე/დააფიქსირე'), use `file_payroll`.",
+    "To FILE payroll on rs.ge use `file_payroll` with the same strict two-step protocol: first prepare without confirm and show the exact period, employee count, gross, income tax, pension, net, warnings and approval expiry; only call again with confirm=true after explicit approval of that preview, passing the exact payroll_run_id, approval_id and snapshot_hash returned by preparation. The server rejects stale, expired, reused or cross-user approvals. Never claim it is submitted merely because the playbook was dispatched; report the returned runtime status and receipt.",
     "To FILE/submit a VAT declaration on rs.ge ('დააფიქსირე/გააგზავნე ჩემი დღგ') use `file_vat_return` with a STRICT two-step protocol: first call it WITHOUT confirm to prepare and show the figures, then ask the user to explicitly approve filing THIS declaration; only call it again with confirm=true AFTER the user clearly says yes in this conversation. NEVER set confirm=true on your own initiative, and never claim a declaration is 'filed/submitted' until the tool result confirms it. (Filing runs the rs.ge playbook in halt-on-dangerous mode: it fills the form and stops before the final submit for the user to finalize — so it requires a recorded rs.ge.vat-declaration playbook and the user's final click on rs.ge.)",
+    "To CREATE AND SEND waybills (ზედნადები) to rs.ge from the company's orders ('ატვირთე/გააგზავნე ზედნადები [date]-ის შეკვეთებზე') use `upload_waybills_for_date` with the SAME strict two-step protocol: first call it WITHOUT confirm to build the preview, then show the per-order buyers, goods, amounts, totals and warnings, note which orders are skipped (already sent) and which existing drafts will be sent, and ask the user to explicitly approve sending. Only call it again with confirm=true AFTER the user clearly says yes. NEVER set confirm=true on your own. Sending is irreversible on rs.ge; never claim a waybill is sent until the tool result confirms it. Use `preview_waybills_from_orders` for a no-send dry run. For one-off lifecycle actions on an existing waybill (by its numeric rs.ge id) use `send_waybill`/`confirm_waybill`/`close_waybill`/`reject_waybill`/`delete_waybill` — these are irreversible and gate through human approval (except deleting an unsent draft, which is auto-approved).",
+    "To ISSUE/register tax invoices (ანგარიშ-ფაქტურა) on rs.ge from the company's orders ('ამიწერე/ატვირთე ფაქტურები [date]-ის შეკვეთებზე') use `upload_invoices_for_date` with the same strict two-step protocol: preview WITHOUT confirm (buyers, gross/taxable/VAT, linked waybills, warnings, skipped already-invoiced orders, confirmation_order_ids) → explicit user approval → confirm=true with orderIds copied from confirmation_order_ids. Issuing an invoice is legally binding; never claim one is issued until the tool result confirms it, and never confirm by date alone because new orders may appear after the preview. This creates/registers the invoice on rs.ge; it does not perform a separate buyer-present/send step. `preview_invoices_from_orders` is the no-write dry run. To READ invoices: `search_invoices` (local mirror, fast) vs `list_live_invoices` (queries rs.ge directly — use for current statuses or 'invoices waiting for my reaction'); `get_invoice` fetches one with line items. `sync_invoices` refreshes the mirror for a period — run it before VAT work if figures look stale. For reacting to a RECEIVED invoice use `accept_invoice` (needs the rs.ge status code — read the invoice first) or `reject_invoice` (with a reason); for fixing an ISSUED one use `correct_invoice` (1=cancel, 2=change operation type, 3=price change, 4=goods return). These three are irreversible and always queue for human approval.",
     "When the user asks a general accounting/tax-code question (definitions, how a rule works, what the law says — not their own numbers), answer from your training and the RAG context (no tool call needed), citing the relevant articles.",
     "After tool results come back, write a concise human answer. Quote specific IDs and short error excerpts so the user can navigate to the right page.",
     "Available tools:",
@@ -1016,16 +1645,18 @@ export function looksLikeDiagnosticQuery(text: string): boolean {
   // and a noisy RAG context otherwise distracts the model from calling the
   // tool. General tax questions ("what is the VAT rate") still go through RAG.
   if (
-    /\b(waybill|declaration|pipeline|bulk|failed|retry|alert|error|status|order|playbook|schedule|run)\b|#\d+/i.test(
+    /\b(waybill|declaration|pipeline|bulk|failed|retry|alert|error|status|order|playbook|schedule|run|upload)\b|ზედნადებ|#\d+/i.test(
       text,
     )
   ) {
     return true;
   }
   const taxTopic =
-    /(დღგ|\bvat\b|ხელფას|payroll|ანაზღაურ|დეკლარაცი|declaration)/i.test(text);
+    /(დღგ|\bvat\b|ხელფას|payroll|ანაზღაურ|დეკლარაცი|declaration|ზედნადებ|waybill|ფაქტურ|invoice)/i.test(
+      text,
+    );
   const actionIntent =
-    /(გამოთვალ|დამიდგ|რამდენ|გადასახდ|ჩვენ|ჩემ|draft|compute|prepare|owe|how much|გადაამოწმ|შეამოწმ|audit|verify|სწორია|დააფიქს|გააგზავ|file|submit|ტვირთ|დაამატ|import)/i.test(
+    /(გამოთვალ|დამიდგ|რამდენ|გადასახდ|ჩვენ|ჩემ|მაჩვენ|მიძებნ|იპოვ|სია|სტატუს|ამიწერ|გამიწერ|draft|compute|prepare|owe|how much|list|show|find|search|sync|issue|create|accept|reject|correct|confirm|გადაამოწმ|შეამოწმ|audit|verify|სწორია|დააფიქს|გააგზავ|file|submit|ტვირთ|ატვირთ|upload|send|დაამატ|import)/i.test(
       text,
     );
   return taxTopic && actionIntent;

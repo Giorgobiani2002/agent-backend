@@ -2,11 +2,17 @@ import { NextFunction, Request, Response } from "express";
 import { getErrorMessage, getErrorStatus } from "../errors";
 
 export function sendError(res: Response, error: unknown): void {
-  res.status(getErrorStatus(error)).json({
+  const status = getErrorStatus(error);
+  const message = getErrorMessage(error);
+  if (status >= 500) {
+    console.error("[sendError]", status, message, error);
+  }
+  res.status(status).json({
     success: false,
-    message: getErrorMessage(error),
+    message,
   });
 }
+
 
 export function asMetadata(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {

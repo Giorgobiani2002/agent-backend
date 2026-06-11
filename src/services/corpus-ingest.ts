@@ -1,11 +1,21 @@
 import path from "path";
-import { readdir, readFile, stat } from "fs/promises";
+import { readFile } from "fs/promises";
 import { HttpError } from "../errors";
 import { GeminiService, geminiService } from "./gemini";
 import { ingestBook } from "./books";
 import { findBookBySourcePath } from "../repositories/books";
 import { chunkStructured, splitIntoSections, type DocumentSection } from "../utils/chunking";
-import { discoverPdfFiles, parsePdfFile } from "../utils/pdf";
+import { parsePdfFile } from "../utils/pdf";
+import {
+  discoverDocumentFiles,
+  parseDocxFile,
+  parseTextFile,
+} from "../utils/documents";
+import {
+  approvedSourceMetadata,
+  findCorpusSource,
+  loadCorpusSourceManifest,
+} from "./corpus-sources";
 
 // Shared corpus-ingestion layer used by the FINO + legislation + accounting
 // scripts. Knowledge is GLOBAL (one shared brain for every company), so these
@@ -181,36 +191,6 @@ export async function ingestStructuredDocument(
   return results;
 }
 
-async function discoverTextFiles(directory: string): Promise<string[]> {
-  const root = path.resolve(directory);
-  let rootStat;
-  try {
-    rootStat = await stat(root);
-  } catch {
-    return [];
-  }
-  if (!rootStat.isDirectory()) return [];
-
-  const files: string[] = [];
-  async function walk(current: string): Promise<void> {
-    for (const entry of await readdir(current, { withFileTypes: true })) {
-      const entryPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        await walk(entryPath);
-      } else if (
-        /\.(md|txt)$/i.test(entry.name) &&
-        !/^README/i.test(entry.name) &&
-        !/-manifest\.(md|txt)$/i.test(entry.name) &&
-        !entry.name.startsWith("_")
-      ) {
-        files.push(entryPath);
-      }
-    }
-  }
-  await walk(root);
-  return files.sort();
-}
-
 function titleFromPath(filePath: string): string {
   return path
     .basename(filePath)
@@ -221,60 +201,77 @@ function titleFromPath(filePath: string): string {
 
 export interface CorpusFolderInput {
   directory: string;
-  topic: CorpusTopic;
+  topic?: CorpusTopic;
   language?: "ka" | "en";
-  /** Include PDFs in the folder (parsed via pdf-parse). Default true. */
+  /** Include PDFs and DOCX files in the folder. Default true. */
   includePdf?: boolean;
   force?: boolean;
 }
 
-/** Walk a drop-folder and ingest every .md/.txt/.pdf as topic-tagged corpus. */
+/** Walk a drop-folder and ingest only allowlisted .md/.txt/.pdf/.docx sources. */
 export async function ingestCorpusFolder(
   input: CorpusFolderInput,
   gemini: GeminiService = geminiService,
 ): Promise<CorpusIngestResult[]> {
   const results: CorpusIngestResult[] = [];
-  const textFiles = await discoverTextFiles(input.directory);
-  const pdfFiles =
-    input.includePdf === false ? [] : await discoverPdfFiles(input.directory).catch(() => []);
+  const extensions =
+    input.includePdf === false ? [".md", ".txt"] : [".md", ".txt", ".pdf", ".docx"];
+  const files = (await discoverDocumentFiles(input.directory, extensions)).filter(
+    (filePath) =>
+      !/^README/i.test(path.basename(filePath)) &&
+      !/-manifest\.(md|txt)$/i.test(filePath) &&
+      !path.basename(filePath).startsWith("_"),
+  );
+  const manifest = await loadCorpusSourceManifest();
 
-  for (const filePath of textFiles) {
-    const text = await readFile(filePath, "utf8");
-    const docResults = await ingestStructuredDocument(
-      {
-        title: titleFromPath(filePath),
-        text,
-        meta: {
-          topic: input.topic,
-          language: input.language,
-          source: "markdown",
-          sourcePath: filePath,
-        },
-        force: input.force,
-      },
-      gemini,
-    );
-    results.push(...docResults);
-  }
-
-  for (const filePath of pdfFiles) {
+  for (const filePath of files) {
     try {
+      const source = findCorpusSource(filePath, manifest);
+      if (!source || source.rightsStatus !== "approved") {
+        results.push({
+          sourcePath: filePath,
+          skipped: true,
+          error: source
+            ? `rights status is ${source.rightsStatus}`
+            : "source is not in the corpus allowlist",
+        });
+        continue;
+      }
       const existing = await findBookBySourcePath(filePath);
       if (existing && !input.force) {
         results.push({ sourcePath: filePath, skipped: true, bookId: existing.id });
         continue;
       }
-      const parsed = await parsePdfFile(filePath);
+      const extension = path.extname(filePath).toLowerCase();
+      const parsed =
+        extension === ".pdf"
+          ? await parsePdfFile(filePath)
+          : extension === ".docx"
+            ? await parseDocxFile(filePath)
+            : await parseTextFile(filePath);
+      const sourceMetadata = await approvedSourceMetadata(filePath, manifest);
       const docResults = await ingestStructuredDocument(
         {
-          title: titleFromPath(filePath),
+          title: source.title || titleFromPath(filePath),
           text: parsed.text,
           meta: {
-            topic: input.topic,
-            language: input.language,
-            source: "pdf",
+            topic: source.topic ?? input.topic ?? "reference",
+            language: source.language ?? input.language,
+            version: source.version,
+            effectiveDate: source.effectiveFrom ?? undefined,
+            sourceUrl: source.sourceUrl ?? undefined,
+            corpusId: source.id,
+            source: extension.slice(1),
             sourcePath: filePath,
-            extra: { pageCount: parsed.pages },
+            extra: {
+              ...sourceMetadata,
+              ...(extension === ".pdf" && "pages" in parsed
+                ? { pageCount: parsed.pages }
+                : {}),
+              ...("warnings" in parsed && parsed.warnings.length
+                ? { extractionWarnings: parsed.warnings }
+                : {}),
+            },
           },
           force: input.force,
         },
@@ -298,6 +295,7 @@ export function summarize(results: CorpusIngestResult[]) {
     total: results.length,
     imported: results.filter((r) => !r.skipped && !r.error).length,
     skipped: results.filter((r) => r.skipped).length,
-    failed: results.filter((r) => r.error).length,
+    rejected: results.filter((r) => r.skipped && r.error).length,
+    failed: results.filter((r) => !r.skipped && r.error).length,
   };
 }

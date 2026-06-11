@@ -1,48 +1,114 @@
 import fs from "fs";
+import os from "os";
+import path from "path";
+import { randomUUID } from "crypto";
+import ffmpeg from "fluent-ffmpeg";
+import ffmpegStatic from "ffmpeg-static";
+
 import { config } from "../config";
 import { HttpError } from "../errors";
+import { getVertexClient } from "./vertex";
+
+if (ffmpegStatic) {
+    ffmpeg.setFfmpegPath(ffmpegStatic);
+}
+
+function convertToWav(inputPath: string): Promise<string> {
+    const outputPath = path.join(os.tmpdir(), `declario-stt-${randomUUID()}.wav`);
+
+    return new Promise((resolve, reject) => {
+        ffmpeg(inputPath)
+            .noVideo()
+            .audioCodec("pcm_s16le")
+            .audioChannels(1)
+            .audioFrequency(16_000)
+            .format("wav")
+            .on("end", () => resolve(outputPath))
+            .on("error", (error) => {
+                fs.promises.unlink(outputPath).catch(() => {});
+                reject(error);
+            })
+            .save(outputPath);
+    });
+}
+
+function retryable(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return /429|500|502|503|504|high demand|unavailable|resource exhausted/i.test(message);
+}
+
+async function transcribeAudio(audioData: Buffer) {
+    const models = [...new Set([
+        config.geminiSttModel,
+        config.geminiSttFallbackModel,
+    ].filter(Boolean))];
+    let lastError: unknown;
+
+    for (const model of models) {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            try {
+                const response = await getVertexClient().models.generateContent({
+                    model,
+                    contents: [{
+                        role: "user",
+                        parts: [
+                            {
+                                inlineData: {
+                                    mimeType: "audio/wav",
+                                    data: audioData.toString("base64"),
+                                },
+                            },
+                            {
+                                text: [
+                                    "Transcribe this audio accurately.",
+                                    "Return only the spoken words, with no commentary or markdown.",
+                                    "Preserve the original language. The speaker will usually use Georgian, English, or Russian.",
+                                ].join(" "),
+                            },
+                        ],
+                    }],
+                    config: {
+                        temperature: 0,
+                        maxOutputTokens: 2048,
+                    },
+                });
+
+                const transcription = response.text?.trim();
+                if (!transcription) {
+                    throw new HttpError(422, "Gemini returned an empty transcription");
+                }
+                return transcription;
+            } catch (error) {
+                lastError = error;
+                if (!retryable(error) || attempt === 1) break;
+                await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+            }
+        }
+    }
+
+    throw lastError ?? new Error("No speech transcription model is configured");
+}
 
 /**
- * Service for Speech-to-Text conversion using OpenAI Whisper.
+ * Transcribes short browser recordings through Vertex AI Gemini.
+ * Browser formats are normalized to mono 16 kHz WAV before upload.
  */
 export class SttService {
-    /**
-     * Transcribes an audio file to text.
-     * @param audioPath Path to the audio file.
-     * @returns Transcribed text.
-     */
     async transcribe(audioPath: string): Promise<string> {
-        if (!config.openaiApiKey) {
-            throw new HttpError(500, "OpenAI API key is not configured");
-        }
-
-        const formData = new FormData();
-        formData.append("file", new Blob([fs.readFileSync(audioPath)]), "audio.webm");
-        formData.append("model", "whisper-1");
-        formData.append("language", "ka"); // Georgian
+        let wavPath: string | null = null;
 
         try {
-            const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-                method: "POST",
-                headers: {
-                    Authorization: `Bearer ${config.openaiApiKey}`,
-                },
-                body: formData,
-            });
-
-            if (!response.ok) {
-                const error = (await response.json()) as any;
-                throw new HttpError(
-                    response.status,
-                    `OpenAI transcription failed: ${error.error?.message || response.statusText}`,
-                );
-            }
-
-            const data = (await response.json()) as { text: string };
-            return data.text;
-        } catch (error: any) {
+            wavPath = await convertToWav(audioPath);
+            const audioData = await fs.promises.readFile(wavPath);
+            return await transcribeAudio(audioData);
+        } catch (error: unknown) {
             if (error instanceof HttpError) throw error;
-            throw new HttpError(500, `Transcription error: ${error instanceof Error ? error.message : String(error)}`);
+            throw new HttpError(
+                500,
+                `Speech transcription failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+        } finally {
+            if (wavPath) await fs.promises.unlink(wavPath).catch(() => {});
         }
     }
 }

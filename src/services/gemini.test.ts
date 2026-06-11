@@ -1,28 +1,26 @@
 describe("geminiService", () => {
-  const originalApiKey = process.env.GEMINI_API_KEY;
-
   afterEach(() => {
     jest.restoreAllMocks();
-    jest.dontMock("@google/genai");
+    jest.dontMock("./vertex");
     jest.resetModules();
-
-    if (originalApiKey === undefined) {
-      delete process.env.GEMINI_API_KEY;
-    } else {
-      process.env.GEMINI_API_KEY = originalApiKey;
-    }
   });
 
-  it("returns a controlled error when GEMINI_API_KEY is missing", async () => {
-    delete process.env.GEMINI_API_KEY;
+  it("uses the shared Vertex client for embeddings", async () => {
+    const embedContent = jest.fn(async () => ({
+      embeddings: [{ values: [0.25, 0.75] }],
+    }));
+    jest.doMock("./vertex", () => ({
+      getVertexClient: () => ({ models: { embedContent } }),
+      resetVertexClient: jest.fn(),
+    }));
     jest.resetModules();
 
     const { geminiService } = await import("./gemini");
 
-    await expect(geminiService.embed("hello")).rejects.toMatchObject({
-      status: 503,
-      message: "GEMINI_API_KEY is required to call Gemini",
-    });
+    await expect(geminiService.embed("hello")).resolves.toEqual([0.25, 0.75]);
+    expect(embedContent).toHaveBeenCalledWith(
+      expect.objectContaining({ contents: "hello" }),
+    );
   });
 
   it("returns a warning state when validation has no knowledge chunks", async () => {
@@ -40,13 +38,11 @@ describe("geminiService", () => {
 
   it("returns a warning state when validation JSON cannot be parsed", async () => {
     jest.spyOn(console, "warn").mockImplementation(() => undefined);
-    process.env.GEMINI_API_KEY = "test-key";
-    jest.doMock("@google/genai", () => ({
-      GoogleGenAI: jest.fn().mockImplementation(() => ({
-        models: {
-          generateContent: jest.fn(async () => ({ text: "not json" })),
-        },
-      })),
+    jest.doMock("./vertex", () => ({
+      getVertexClient: () => ({
+        models: { generateContent: jest.fn(async () => ({ text: "not json" })) },
+      }),
+      resetVertexClient: jest.fn(),
     }));
     jest.resetModules();
 
@@ -67,15 +63,15 @@ describe("geminiService", () => {
 
   it("returns a warning state when validation upstream fails", async () => {
     jest.spyOn(console, "warn").mockImplementation(() => undefined);
-    process.env.GEMINI_API_KEY = "test-key";
-    jest.doMock("@google/genai", () => ({
-      GoogleGenAI: jest.fn().mockImplementation(() => ({
+    jest.doMock("./vertex", () => ({
+      getVertexClient: () => ({
         models: {
           generateContent: jest.fn(async () => {
             throw new Error("upstream unavailable");
           }),
         },
-      })),
+      }),
+      resetVertexClient: jest.fn(),
     }));
     jest.resetModules();
 

@@ -24,6 +24,8 @@ import {
   toolDeclarations,
 } from "./chat-tools";
 import { checkAndBumpChatLimit } from "./chat-rate-limit";
+import { getChatAttachments } from "../repositories/chat-attachments";
+import { rsServerClient } from "./rs-server-client";
 
 interface DocumentContext {
   bookId: string;
@@ -36,6 +38,21 @@ interface DocumentContext {
 }
 
 const RAG_CONTEXT_PREVIEW_CHARS = 400;
+const VOICE_MAX_OUTPUT_TOKENS = 240;
+const DOMAIN_GUARD_MODEL = "declario-domain-guard-v1";
+const DOMAIN_GUARD_INSTRUCTION = [
+  "Scope policy: declario only helps with finance, accounting, bookkeeping, taxes, payroll, VAT, profit tax, invoices, waybills, bank statements, declarations, rs.ge, business operations data, uploaded financial documents/spreadsheets, and Declario product workflows.",
+  "If the user asks about politics, public figures, entertainment, gossip, culture-war/provocative topics, general trivia, medical, legal matters outside tax/accounting, coding, or any other off-topic subject, do not answer the substance. Briefly say you can help with finance/accounting/tax/rs.ge topics and ask them to reframe it in that context.",
+  "Do not debate or analyze Georgian politicians or public figures unless the question is directly about a finance, tax, accounting, payroll, compliance, or business-record issue.",
+].join(" ");
+const VOICE_SYSTEM_INSTRUCTION = [
+  "You are in a live voice conversation.",
+  "Reply in the same language as the user's latest message.",
+  "Sound natural, attentive, and direct, like a helpful person in a real conversation.",
+  "Usually answer in one or two short sentences and stay under 45 words unless the user explicitly asks for detail.",
+  "Do not repeat the question, give a speech, use headings, bullets, markdown, or citations in a spoken reply.",
+  "Ask at most one short follow-up question when information is missing.",
+].join(" ");
 
 function clipChunkPreviewForMetadata(content: string, maxChars: number): string {
   const collapsed = content.replace(/\s+/g, " ").trim();
@@ -46,6 +63,9 @@ function clipChunkPreviewForMetadata(content: string, maxChars: number): string 
 }
 
 function chunkSourceUrl(metadata: Record<string, unknown>): string | undefined {
+  if (typeof metadata.sourceUrl === "string" && metadata.sourceUrl.length > 0) {
+    return metadata.sourceUrl;
+  }
   if (typeof metadata.url === "string" && metadata.url.length > 0) {
     return metadata.url;
   }
@@ -60,6 +80,35 @@ function asJsonObject(value: unknown): Record<string, unknown> {
     return value as Record<string, unknown>;
   }
   return {};
+}
+
+function isGreetingOrCapabilityQuestion(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return (
+    /^(hi|hello|hey|გამარჯობა|სალამი|გაუმარჯოს)[\s!.?]*$/i.test(normalized) ||
+    /(what can you do|help me|your capabilities|შეგიძლია|რას აკეთებ|რაში დამეხმარები|რა იცი|რა ცოდნა გაქვს)/i.test(
+      normalized,
+    )
+  );
+}
+
+function isInScopeChatTopic(text: string): boolean {
+  if (isGreetingOrCapabilityQuestion(text)) return true;
+  return /(declario|rs\.?ge|revenue service|შემოსავლების|ფინანს|ბუღალტ|account|accounting|bookkeep|finance|financial|tax|vat|დღგ|profit tax|მოგების|გადასახად|declaration|დეკლარაცი|invoice|ფაქტურ|waybill|ზედნადებ|payroll|salary|ხელფას|employee|თანამშრომ|pension|პენსი|bank|ბანკ|statement|ამონაწერ|order|შეკვეთ|shopify|integration|pipeline|bulk|upload|ატვირთ|file|submit|rs-|საგადასახადო|საფინანსო|კომპანი|business|ბიზნეს|cash|revenue|expense|income|cost|asset|აქტივ|ledger|journal|balance|trial balance|excel|spreadsheet|xlsx|csv|დოკუმენტ|document|receipt|ჩეკ|audit|compliance|კომპლაიანს|ზედმეტობა|დავალიან|ვალდებულ)/i.test(
+    text,
+  );
+}
+
+function domainGuardReply(text: string, voiceMode: boolean): string | null {
+  if (isInScopeChatTopic(text)) return null;
+  if (voiceMode) {
+    return "ამ თემაზე ვერ გიპასუხებთ. დამისვით კითხვა ფინანსებზე, ბუღალტერიაზე, გადასახადებზე, rs.ge-ზე ან Declario-ს მონაცემებზე.";
+  }
+  return [
+    "ამ თემაზე ვერ გიპასუხებთ, რადგან Declario-ს ჩატი განკუთვნილია ფინანსების, ბუღალტერიის, გადასახადების, payroll-ის, rs.ge ოპერაციების, დოკუმენტებისა და კომპანიის ბიზნეს-მონაცემების საკითხებისთვის.",
+    "",
+    "თუ კითხვა ამ კონტექსტს უკავშირდება, მომწერეთ ფინანსური/საგადასახადო ნაწილი და იმაზე დაგეხმარებით.",
+  ].join("\n");
 }
 
 /**
@@ -279,7 +328,12 @@ async function gatherComprehensiveContext(
 function describeBookSource(metadata: Record<string, unknown>): string {
   const parts: string[] = [];
   const source = typeof metadata.source === "string" ? metadata.source : undefined;
-  const url = typeof metadata.url === "string" ? metadata.url : undefined;
+  const url =
+    typeof metadata.sourceUrl === "string"
+      ? metadata.sourceUrl
+      : typeof metadata.url === "string"
+        ? metadata.url
+        : undefined;
   const videoId =
     typeof metadata.videoId === "string" ? metadata.videoId : undefined;
   const sourcePath =
@@ -289,6 +343,16 @@ function describeBookSource(metadata: Record<string, unknown>): string {
   if (videoId) parts.push(`videoId=${videoId}`);
   if (url) parts.push(`url=${url}`);
   if (!videoId && !url && sourcePath) parts.push(`sourcePath=${sourcePath}`);
+  if (typeof metadata.attribution === "string") {
+    parts.push(`attribution=${metadata.attribution}`);
+  }
+  if (typeof metadata.license === "string") parts.push(`license=${metadata.license}`);
+  if (typeof metadata.effectiveFrom === "string") {
+    parts.push(`effectiveFrom=${metadata.effectiveFrom}`);
+  }
+  if (typeof metadata.effectiveTo === "string") {
+    parts.push(`effectiveTo=${metadata.effectiveTo}`);
+  }
 
   return parts.join(" ");
 }
@@ -325,6 +389,7 @@ function buildContextPrompt(context: ComprehensiveContext): string {
   });
 
   const instructions = [
+    DOMAIN_GUARD_INSTRUCTION,
     "You are answering from retrieved knowledge base sources (books and YouTube transcripts).",
     "Read every provided source completely before answering. Each source contains all its chunks ordered by chunk_index.",
     "Write in the same language as the user's latest message (e.g. Georgian if they wrote Georgian).",
@@ -373,7 +438,7 @@ function buildGeminiMessages(input: {
   return [
     {
       role: "user",
-      parts: [{ text: contextPrompt }],
+      parts: [{ text: `${DOMAIN_GUARD_INSTRUCTION}\n\n${contextPrompt}` }],
     },
     ...historyMessages,
     {
@@ -391,11 +456,127 @@ export interface ChatToolTraceEntry {
   error?: string;
 }
 
+interface PayrollPendingAction {
+  type: "payroll_file";
+  status: "pending";
+  payrollRunId: string;
+  approvalId: string;
+  snapshotHash: string;
+  expiresAt: string;
+  periodYear: number;
+  periodMonth: number;
+  employeeCount: number;
+  totalGross: number;
+  totalIncomeTax: number;
+  totalEmployeePension: number;
+  totalEmployerPension: number;
+  totalNet: number;
+  warnings: string[];
+}
+
+function payrollPendingActionFromResult(result: unknown): PayrollPendingAction | undefined {
+  const root = asJsonObject(result);
+  const prepared = asJsonObject(root.prepared);
+  const snapshot = asJsonObject(prepared.snapshot);
+  const approval = asJsonObject(prepared.approval);
+  if (
+    root.requiresConfirmation !== true ||
+    typeof prepared.payroll_run_id !== "string" ||
+    typeof approval.id !== "string" ||
+    typeof approval.snapshot_hash !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    type: "payroll_file",
+    status: "pending",
+    payrollRunId: prepared.payroll_run_id,
+    approvalId: approval.id,
+    snapshotHash: approval.snapshot_hash,
+    expiresAt: String(approval.expires_at ?? ""),
+    periodYear: Number(snapshot.period_year) || 0,
+    periodMonth: Number(snapshot.period_month) || 0,
+    employeeCount: Number(snapshot.employee_count) || 0,
+    totalGross: Number(snapshot.total_gross) || 0,
+    totalIncomeTax: Number(snapshot.total_income_tax) || 0,
+    totalEmployeePension: Number(snapshot.total_employee_pension) || 0,
+    totalEmployerPension: Number(snapshot.total_employer_pension) || 0,
+    totalNet: Number(snapshot.total_net) || 0,
+    warnings: Array.isArray(snapshot.warnings)
+      ? snapshot.warnings.map(String)
+      : [],
+  };
+}
+
+function pendingPayrollAction(trace: ChatToolTraceEntry[]): PayrollPendingAction | undefined {
+  for (let index = trace.length - 1; index >= 0; index -= 1) {
+    if (trace[index].name === "file_payroll") {
+      const action = payrollPendingActionFromResult(trace[index].result);
+      if (action) return action;
+    }
+  }
+  return undefined;
+}
+
+function payrollPeriodFromText(content: string): { year: number; month: number } {
+  const nowParts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tbilisi",
+    year: "numeric",
+    month: "numeric",
+  }).formatToParts(new Date());
+  let year = Number(nowParts.find((part) => part.type === "year")?.value);
+  let month = Number(nowParts.find((part) => part.type === "month")?.value);
+  const numeric = content.match(/\b(20\d{2})\s*[-/.]\s*(1[0-2]|0?[1-9])\b/);
+  if (numeric) return { year: Number(numeric[1]), month: Number(numeric[2]) };
+
+  const monthStems = [
+    "იანვარ",
+    "თებერვალ",
+    "მარტ",
+    "აპრილ",
+    "მაის",
+    "ივნის",
+    "ივლის",
+    "აგვისტ",
+    "სექტემბერ",
+    "ოქტომბერ",
+    "ნოემბერ",
+    "დეკემბერ",
+  ];
+  const lower = content.toLocaleLowerCase("ka-GE");
+  const matchedMonth = monthStems.findIndex((stem) => lower.includes(stem));
+  if (matchedMonth >= 0) month = matchedMonth + 1;
+  const yearMatch = content.match(/\b(20\d{2})\b/);
+  if (yearMatch) year = Number(yearMatch[1]);
+  return { year, month };
+}
+
+function payrollPreviewText(action: PayrollPendingAction, attachmentWarnings: string[]): string {
+  const money = (value: number) =>
+    new Intl.NumberFormat("ka-GE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      .format(value);
+  const warnings = [...attachmentWarnings, ...action.warnings];
+  return [
+    `ხელფასების ფაილი დამუშავდა და ${action.periodMonth}/${action.periodYear} პერიოდის payroll მომზადდა.`,
+    "",
+    `თანამშრომლები: ${action.employeeCount}`,
+    `დარიცხული ხელფასი: ${money(action.totalGross)} GEL`,
+    `საშემოსავლო: ${money(action.totalIncomeTax)} GEL`,
+    `თანამშრომლის პენსია: ${money(action.totalEmployeePension)} GEL`,
+    `დამსაქმებლის პენსია: ${money(action.totalEmployerPension)} GEL`,
+    `ხელზე გასაცემი: ${money(action.totalNet)} GEL`,
+    ...(warnings.length ? ["", "გაფრთხილებები:", ...warnings.map((warning) => `- ${warning}`)] : []),
+    "",
+    "RS-ზე გასაგზავნად დაადასტურეთ ქვემოთ მოცემული ბარათი. დადასტურება 15 წუთში იწურება.",
+  ].join("\n");
+}
+
 async function runToolLoop(
   gemini: GeminiService,
   systemInstruction: string,
   initialContents: Content[],
   ctx: { companyId: string; userId?: string },
+  options: { voiceMode?: boolean } = {},
 ): Promise<{ text: string; model: string; trace: ChatToolTraceEntry[]; iterations: number }> {
   const tools = toolDeclarations();
   const trace: ChatToolTraceEntry[] = [];
@@ -409,6 +590,9 @@ async function runToolLoop(
       contents,
       tools,
       toolChoice: "auto",
+      ...(options.voiceMode
+        ? { temperature: 0.65, maxOutputTokens: VOICE_MAX_OUTPUT_TOKENS }
+        : {}),
     });
     model = turn.model;
 
@@ -496,6 +680,9 @@ async function runToolLoop(
     contents,
     tools,
     toolChoice: "none",
+    ...(options.voiceMode
+      ? { temperature: 0.65, maxOutputTokens: VOICE_MAX_OUTPUT_TOKENS }
+      : {}),
   });
   return {
     text: finalTurn.text || "(no answer)",
@@ -512,6 +699,7 @@ export async function sendConversationMessage(
     content: string;
     metadata: Record<string, unknown>;
     userId?: string;
+    attachmentIds?: string[];
   },
   gemini: GeminiService = geminiService,
 ) {
@@ -526,19 +714,61 @@ export async function sendConversationMessage(
   if (!conversation) {
     throw new HttpError(404, "Conversation not found");
   }
+  if (conversation.user_id && input.userId && conversation.user_id !== input.userId) {
+    throw new HttpError(403, "Conversation belongs to another user");
+  }
 
   // Per-company per-hour rate limit. Throws 429 when over cap; the
   // bump itself IS the check, so two concurrent requests can't race
   // past the limit. Set CHAT_MAX_MSGS_PER_HOUR=0 to disable.
   await checkAndBumpChatLimit(input.companyId);
 
+  const voiceMode = input.metadata.voiceMode === true;
+  const guardedReply = domainGuardReply(content, voiceMode);
+  if (guardedReply) {
+    const persisted = await persistChatTurn({
+      conversationId: input.conversationId,
+      userContent: content,
+      userMetadata: input.metadata,
+      assistantContent: guardedReply,
+      assistantModel: DOMAIN_GUARD_MODEL,
+      assistantMetadata: {
+        domainGuard: {
+          blocked: true,
+          allowedScope:
+            "finance/accounting/tax/payroll/rs.ge/Declario/business operations",
+        },
+        voiceMode,
+      },
+      contexts: [],
+    });
+    return {
+      ...persisted,
+      contexts: [],
+    };
+  }
+
   const history = await getRecentMessages(input.conversationId);
-  const diagnosticMode = looksLikeDiagnosticQuery(content);
+  const attachments = await getChatAttachments({
+    companyId: input.companyId,
+    conversationId: input.conversationId,
+    attachmentIds: input.attachmentIds ?? [],
+    userId: input.userId,
+  });
+  if (attachments.length !== (input.attachmentIds ?? []).length) {
+    throw new HttpError(404, "One or more attachments were not found");
+  }
+  const payrollAttachments = attachments.filter(
+    (attachment) => attachment.kind === "payroll_spreadsheet",
+  );
+  const diagnosticMode = payrollAttachments.length
+    ? true
+    : looksLikeDiagnosticQuery(content);
 
   // Diagnostic queries skip the RAG embed: the answer lives in live data,
   // not the book corpus, and the embed call is the slowest single step.
   let context: ComprehensiveContext = emptyContext();
-  if (!diagnosticMode) {
+  if (!diagnosticMode && !voiceMode) {
     let queryEmbedding: number[];
     try {
       queryEmbedding = await gemini.embed(formatQueryForEmbedding(content));
@@ -556,16 +786,84 @@ export async function sendConversationMessage(
   let toolTrace: ChatToolTraceEntry[] = [];
   let toolIterations = 0;
   try {
+    if (payrollAttachments.length) {
+      const employees = payrollAttachments.flatMap((attachment) => {
+        const parsed = asJsonObject(attachment.parsed_data);
+        return Array.isArray(parsed.employees)
+          ? parsed.employees.map((employee) => {
+              const row = asJsonObject(employee);
+              return {
+                name: String(row.name ?? ""),
+                gross: Number(row.gross) || 0,
+                ...(typeof row.personal_id === "string"
+                  ? { personal_id: row.personal_id }
+                  : {}),
+                pension_participant: row.pension_participant !== false,
+              };
+            })
+          : [];
+      });
+      if (!employees.length) {
+        throw new HttpError(400, "The attached payroll file has no valid employee rows");
+      }
+      const importStarted = Date.now();
+      const importResult = await dispatchTool(
+        "import_employees",
+        { employees },
+        { companyId: input.companyId, userId: input.userId },
+      );
+      toolTrace.push({
+        name: "import_employees",
+        args: { employeeCount: employees.length },
+        result: importResult,
+        latencyMs: Date.now() - importStarted,
+      });
+      if ("error" in asJsonObject(importResult)) {
+        throw new HttpError(502, String(asJsonObject(importResult).error));
+      }
+
+      const period = payrollPeriodFromText(content);
+      const prepareStarted = Date.now();
+      const prepareResult = await dispatchTool(
+        "file_payroll",
+        { year: period.year, month: period.month },
+        { companyId: input.companyId, userId: input.userId },
+      );
+      toolTrace.push({
+        name: "file_payroll",
+        args: period,
+        result: prepareResult,
+        latencyMs: Date.now() - prepareStarted,
+      });
+      const action = payrollPendingActionFromResult(prepareResult);
+      if (!action) {
+        const error = asJsonObject(asJsonObject(prepareResult).prepared).error;
+        throw new HttpError(502, String(error ?? "Payroll preview could not be prepared"));
+      }
+      const attachmentWarnings = payrollAttachments.flatMap((attachment) => {
+        const warnings = asJsonObject(attachment.parsed_data).warnings;
+        return Array.isArray(warnings) ? warnings.map(String) : [];
+      });
+      assistant = {
+        text: payrollPreviewText(action, attachmentWarnings),
+        model: "declario-payroll-workflow-v1",
+      };
+      toolIterations = 2;
+    } else {
     const baseMessages = buildGeminiMessages({ history, context, content });
-    const toolLoopResult = await runToolLoop(
+      const toolLoopResult = await runToolLoop(
       gemini,
-      chatToolSystemInstruction(),
+      voiceMode
+        ? `${DOMAIN_GUARD_INSTRUCTION}\n\n${chatToolSystemInstruction()}\n\n${VOICE_SYSTEM_INSTRUCTION}`
+        : `${DOMAIN_GUARD_INSTRUCTION}\n\n${chatToolSystemInstruction()}`,
       baseMessages,
       { companyId: input.companyId, userId: input.userId },
+      { voiceMode },
     );
     assistant = { text: toolLoopResult.text, model: toolLoopResult.model };
     toolTrace = toolLoopResult.trace;
     toolIterations = toolLoopResult.iterations;
+    }
   } catch (error) {
     console.error("[chat] Gemini generateContent failed:", error);
     throw new HttpError(502, `Gemini chat failed: ${getUpstreamErrorMessage(error)}`);
@@ -578,6 +876,13 @@ export async function sendConversationMessage(
     assistantContent: assistant.text,
     assistantModel: assistant.model,
     assistantMetadata: {
+      pendingAction: pendingPayrollAction(toolTrace),
+      attachments: payrollAttachments.map((attachment) => ({
+        id: attachment.id,
+        name: attachment.original_name,
+        kind: attachment.kind,
+        status: attachment.status,
+      })),
       tools:
         toolTrace.length > 0
           ? {
@@ -594,6 +899,7 @@ export async function sendConversationMessage(
             }
           : undefined,
       diagnosticMode,
+      voiceMode,
       rag: {
         topK: config.ragTopK,
         documentLimit: config.ragDocumentLimit,
@@ -641,10 +947,36 @@ export async function sendConversationMessage(
   };
 }
 
+export async function confirmPayrollAction(input: {
+  companyId: string;
+  conversationId: string;
+  userId?: string;
+  payrollRunId: string;
+  approvalId: string;
+  snapshotHash: string;
+}) {
+  if (!input.userId) throw new HttpError(401, "Authenticated user is required");
+  const conversation = await getConversation(input.companyId, input.conversationId);
+  if (!conversation) throw new HttpError(404, "Conversation not found");
+  if (conversation.user_id && conversation.user_id !== input.userId) {
+    throw new HttpError(403, "Conversation belongs to another user");
+  }
+  return rsServerClient.post("/internal/tools/payroll/file", {
+    companyId: input.companyId,
+    userId: input.userId,
+    body: {
+      payroll_run_id: input.payrollRunId,
+      approval_id: input.approvalId,
+      snapshot_hash: input.snapshotHash,
+    },
+  });
+}
+
 export const chatService = {
   createConversation,
   deleteConversation,
   listConversations,
   getMessages,
   sendConversationMessage,
+  confirmPayrollAction,
 };

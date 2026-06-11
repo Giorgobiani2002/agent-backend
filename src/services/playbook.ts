@@ -1,11 +1,11 @@
 import path from "path";
 import fs from "fs/promises";
 import crypto from "crypto";
-import { GoogleGenAI } from "@google/genai";
 import { config } from "../config";
-import { HttpError } from "../errors";
 import { downloadVideo, extractVideoId } from "../utils/youtube";
 import { extractScreenshots } from "../utils/screenshots";
+import { uploadVertexMedia } from "../utils/gcs";
+import { getVertexClient } from "./vertex";
 import {
   createPendingPlaybook,
   markPlaybookAnalyzing,
@@ -15,13 +15,6 @@ import {
   type PlaybookRow,
   type PlaybookStep,
 } from "../repositories/playbooks";
-
-function getClient(): GoogleGenAI {
-  if (!config.geminiApiKey) {
-    throw new HttpError(503, "GEMINI_API_KEY is required");
-  }
-  return new GoogleGenAI({ apiKey: config.geminiApiKey });
-}
 
 const PLAYBOOK_PROMPT = `You are watching a screen recording of a user performing a task on a web portal (likely the Georgian tax portal rs.ge or a similar government site).
 
@@ -247,48 +240,22 @@ async function attachStepEvidence(
   });
 }
 
-async function pollUntilActive(
-  ai: GoogleGenAI,
-  fileName: string,
-  timeoutMs = 120_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const file = await ai.files.get({ name: fileName });
-    if ((file as any).state === "ACTIVE") return;
-    if ((file as any).state === "FAILED") {
-      throw new Error("Gemini file processing failed");
-    }
-    await new Promise((r) => setTimeout(r, 3000));
-  }
-  throw new Error("Timed out waiting for Gemini file to become ACTIVE");
-}
-
 async function analyzeVideoFile(
   filePath: string,
   mimeType: string,
   displayName: string,
 ): Promise<{ steps: PlaybookStep[]; model: string; warnings: string[] }> {
-  const ai = getClient();
-
-  const uploadResult = await ai.files.upload({
-    file: filePath,
-    config: { mimeType, displayName },
-  });
-
-  const fileName = (uploadResult as any).name as string;
-  const fileUri = (uploadResult as any).uri as string;
+  const ai = getVertexClient();
+  const media = await uploadVertexMedia({ filePath, mimeType, displayName });
 
   try {
-    await pollUntilActive(ai, fileName);
-
     const response = await ai.models.generateContent({
       model: config.geminiPlaybookModel,
       contents: [
         {
           role: "user",
           parts: [
-            { fileData: { fileUri, mimeType } },
+            { fileData: { fileUri: media.uri, mimeType } },
             { text: PLAYBOOK_PROMPT },
           ],
         },
@@ -317,7 +284,7 @@ async function analyzeVideoFile(
     const { steps, warnings } = normalizeExtractedSteps(parsed.steps);
     return { steps, model, warnings };
   } finally {
-    await ai.files.delete({ name: fileName }).catch(() => {});
+    await media.cleanup().catch(() => {});
   }
 }
 
