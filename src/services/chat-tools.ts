@@ -240,6 +240,48 @@ export const CHAT_TOOLS: ChatTool[] = [
     },
   },
   {
+    name: "draft_profit_tax",
+    description:
+      "Compute the company's monthly profit tax (მოგების გადასახადი, Estonian model: CIT 15%, gross-up amount×15/85) for distribution events the user names in the conversation — dividends paid (distributed_profit), non-business expenses (non_business_expense), free supplies (free_supply), representation expenses over the limit (representation_over_limit). Extract each event's NET amount from the user's message into lines. Use for 'მოგების გადასახადი დამითვალე', 'გავანაწილე დივიდენდი X — რა გადასახადია'. Returns per-line tax + totals + warnings. Drafting only — filing is separate.",
+    parameters: {
+      type: "object",
+      properties: {
+        year: { type: "integer", description: "period year; defaults to current" },
+        month: { type: "integer", minimum: 1, maximum: 12, description: "period month 1-12; defaults to current" },
+        lines: {
+          type: "array",
+          description: "distribution events from the conversation",
+          items: {
+            type: "object",
+            properties: {
+              type: {
+                type: "string",
+                enum: [
+                  "distributed_profit",
+                  "non_business_expense",
+                  "free_supply",
+                  "representation_over_limit",
+                ],
+              },
+              amount: { type: "number", description: "net amount in GEL" },
+            },
+            required: ["type", "amount"],
+          },
+        },
+      },
+      required: ["lines"],
+    },
+    async handler(ctx, args) {
+      const lines = Array.isArray(args.lines) ? (args.lines as any[]) : [];
+      if (!lines.length) return { error: "lines is required — name at least one distribution event" };
+      return safeRsPost(`/internal/tools/profit-tax/preview`, ctx, {
+        year: num(args.year),
+        month: num(args.month),
+        lines: lines.map((l) => ({ type: str(l?.type), amount: num(l?.amount) ?? 0 })),
+      });
+    },
+  },
+  {
     name: "audit_vat_submission",
     description:
       "Audit/verify whether the company's VAT (დღგ) declaration for a period is correct: compares the prepared/submitted figures against a fresh recompute from current invoices and returns any discrepancies (field, declared vs recomputed, delta) plus the submission status. Use whenever the user asks to CHECK/VERIFY their already-prepared or submitted/uploaded VAT ('გადაამოწმე ჩემი ატვირთული დღგ', 'is my submitted VAT correct', 'ეს დეკლარაცია სწორია?'). Read-only. Explain any discrepancies and cite the relevant Tax Code rule.",
@@ -1620,7 +1662,7 @@ export function chatToolSystemInstruction(): string {
     "Scope policy: only help with finance, accounting, bookkeeping, taxes, payroll, VAT, profit tax, invoices, waybills, bank statements, declarations, rs.ge, business operations data, uploaded financial documents/spreadsheets, and Declario product workflows. If the user asks about politics, public figures, entertainment, gossip, culture-war/provocative topics, general trivia, medical, coding, or any other off-topic subject, do not answer the substance. Briefly say you can help with finance/accounting/tax/rs.ge topics and ask them to reframe it in that context.",
     "You are declario's chat assistant for accountants and SMB owners.",
     "When the user asks about live data — a specific waybill, declaration, pipeline run, bulk run, order, schedule, playbook, or AI run, or about why something failed — CALL ONE OF THE TOOLS BELOW first. Do not fabricate IDs, statuses, or error reasons. If you need data, ask the tool; if the tool returns nothing or an error, say so plainly.",
-    "Computing or verifying THE COMPANY'S OWN figures for a period is LIVE DATA, not a general question — call the matching tool and base every number strictly on its result, reading out any warnings or discrepancies: `draft_vat_return` for VAT (დღგ); `draft_payroll` for payroll/salaries (ხელფასები — gross / income tax 20% / pension); `audit_vat_submission` to CHECK/VERIFY an already-prepared or submitted VAT declaration against current data ('გადაამოწმე ჩემი ატვირთული დღგ', 'is my submitted VAT correct'). Do NOT call these for GENERAL questions — the rate, definitions, how a rule works, or how to fill a form — answer those from the knowledge base, citing the relevant articles. There is no computation tool yet for profit tax or the small-business 1% tax — explain those from the knowledge base and say a calculation tool isn't available yet.",
+    "Computing or verifying THE COMPANY'S OWN figures for a period is LIVE DATA, not a general question — call the matching tool and base every number strictly on its result, reading out any warnings or discrepancies: `draft_vat_return` for VAT (დღგ); `draft_payroll` for payroll/salaries (ხელფასები — gross / income tax 20% / pension); `audit_vat_submission` to CHECK/VERIFY an already-prepared or submitted VAT declaration against current data ('გადაამოწმე ჩემი ატვირთული დღგ', 'is my submitted VAT correct'). Do NOT call these for GENERAL questions — the rate, definitions, how a rule works, or how to fill a form — answer those from the knowledge base, citing the relevant articles. For profit tax (მოგების გადასახადი) use `draft_profit_tax`, extracting the distribution events (dividends, non-business expenses, free supplies, representation over limit) and their net amounts from the user's message. There is no computation tool yet for the small-business 1% tax — for it, compute 1% of the turnover the user states, citing the knowledge base.",
     "Disambiguate Georgian salary requests carefully. If the user provides a pasted/parsed employee list and asks to add/import salaries, call `import_employees`, then `draft_payroll`. If the employee records already exist and the user asks to upload/file/send payroll for a period ('ხელფასები ამიტვირთე/გააგზავნე/დააფიქსირე'), use `file_payroll`.",
     "To FILE payroll on rs.ge use `file_payroll` with the same strict two-step protocol: first prepare without confirm and show the exact period, employee count, gross, income tax, pension, net, warnings and approval expiry; only call again with confirm=true after explicit approval of that preview, passing the exact payroll_run_id, approval_id and snapshot_hash returned by preparation. The server rejects stale, expired, reused or cross-user approvals. Never claim it is submitted merely because the playbook was dispatched; report the returned runtime status and receipt.",
     "To FILE/submit a VAT declaration on rs.ge ('დააფიქსირე/გააგზავნე ჩემი დღგ') use `file_vat_return` with a STRICT two-step protocol: first call it WITHOUT confirm to prepare and show the figures, then ask the user to explicitly approve filing THIS declaration; only call it again with confirm=true AFTER the user clearly says yes in this conversation. NEVER set confirm=true on your own initiative, and never claim a declaration is 'filed/submitted' until the tool result confirms it. (Filing runs the rs.ge playbook in halt-on-dangerous mode: it fills the form and stops before the final submit for the user to finalize.) For PAYROLL there is no chat filing tool — payroll filing needs a real user's approval in the dashboard. The chat can draft_payroll (compute) and import_employees, but tell the user to file the payroll declaration from the Payroll page.",
@@ -1652,7 +1694,7 @@ export function looksLikeDiagnosticQuery(text: string): boolean {
     return true;
   }
   const taxTopic =
-    /(დღგ|\bvat\b|ხელფას|payroll|ანაზღაურ|დეკლარაცი|declaration|ზედნადებ|waybill|ფაქტურ|invoice)/i.test(
+    /(დღგ|\bvat\b|ხელფას|payroll|ანაზღაურ|დეკლარაცი|declaration|ზედნადებ|waybill|ფაქტურ|invoice|მოგების გადასახად|profit tax|დივიდენდ|dividend)/i.test(
       text,
     );
   const actionIntent =

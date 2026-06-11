@@ -1,14 +1,19 @@
 export const config = {
   openaiApiKey: process.env.OPENAI_API_KEY,
 
-  geminiEmbeddingModel: process.env.GEMINI_EMBEDDING_MODEL ?? "text-embedding-005",
+  // NOTE: keep model + dimensions in lockstep with the pgvector schema —
+  // book_chunks.embedding is vector(1536) and the whole corpus is embedded
+  // with gemini-embedding-2 @1536. (text-embedding-005 404s on this API key
+  // and only supports 768 dims; switching models requires a column migration
+  // + full re-embed of every chunk.)
+  geminiEmbeddingModel: process.env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-2",
   geminiChatModel: process.env.GEMINI_CHAT_MODEL ?? "gemini-3.5-flash",
   geminiPlaybookModel: process.env.GEMINI_PLAYBOOK_MODEL ?? "gemini-3.5-flash",
   geminiSttModel: process.env.GEMINI_STT_MODEL ?? "gemini-3.1-flash-lite-preview",
   geminiSttFallbackModel: process.env.GEMINI_STT_FALLBACK_MODEL ?? "gemini-2.5-flash",
   geminiTtsModel: process.env.GEMINI_TTS_MODEL ?? "gemini-2.5-flash-tts",
   geminiTtsVoice: process.env.GEMINI_TTS_VOICE ?? "Kore",
-  geminiEmbeddingDimensions: Number(process.env.GEMINI_EMBEDDING_DIMENSIONS ?? 768),
+  geminiEmbeddingDimensions: Number(process.env.GEMINI_EMBEDDING_DIMENSIONS ?? 1536),
   geminiChatMaxOutputTokens: Number(process.env.GEMINI_CHAT_MAX_OUTPUT_TOKENS ?? 8192),
   geminiChatTemperature: Number(process.env.GEMINI_CHAT_TEMPERATURE ?? 0.55),
   ragTopK: Number(process.env.RAG_TOP_K ?? 12),
