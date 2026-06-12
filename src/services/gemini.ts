@@ -1,9 +1,9 @@
 /**
- * gemini.ts — Vertex AI backend via @google/genai
+ * gemini.ts — Gemini API backend via @google/genai
  *
- * Uses GoogleGenAI with `vertexai: true` so every call bills to the
- * GCP project (gen-lang-client-0730194112) rather than a personal API key.
- * Models: gemini-2.0-flash-001 (chat) + text-embedding-005 (embeddings).
+ * Uses GoogleGenAI in apiKey mode (see vertex.ts) so every call bills as the
+ * Gemini API SKU, which the $1,000 GenAI App Builder credit covers.
+ * Models: gemini-3.5-flash (chat) + gemini-embedding-2 @1536 (embeddings).
  */
 import {
   Content,

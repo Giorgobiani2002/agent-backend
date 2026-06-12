@@ -1,17 +1,25 @@
 export const config = {
   openaiApiKey: process.env.OPENAI_API_KEY,
 
+  // Gemini API key (AI Studio). Billing routes through the Gemini API SKU so
+  // the $1,000 GenAI App Builder credit applies. (Calling via Vertex AI —
+  // GoogleGenAI({ vertexai: true }) — bills as "Vertex AI", which the credit
+  // does NOT cover.)
+  geminiApiKey: process.env.GEMINI_API_KEY ?? "",
+
   // NOTE: keep model + dimensions in lockstep with the pgvector schema —
   // book_chunks.embedding is vector(1536) and the whole corpus is embedded
-  // with gemini-embedding-2 @1536. (text-embedding-005 404s on this API key
-  // and only supports 768 dims; switching models requires a column migration
-  // + full re-embed of every chunk.)
+  // with gemini-embedding-2 @1536. Verified: gemini-embedding-2 @1536 returns
+  // identical dimensions on the Gemini API, so the Vertex→Gemini-API switch
+  // needs no re-embed. (text-embedding-005 404s on the API key / 768 dims only.)
   geminiEmbeddingModel: process.env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-2",
   geminiChatModel: process.env.GEMINI_CHAT_MODEL ?? "gemini-3.5-flash",
   geminiPlaybookModel: process.env.GEMINI_PLAYBOOK_MODEL ?? "gemini-3.5-flash",
   geminiSttModel: process.env.GEMINI_STT_MODEL ?? "gemini-3.1-flash-lite-preview",
   geminiSttFallbackModel: process.env.GEMINI_STT_FALLBACK_MODEL ?? "gemini-2.5-flash",
-  geminiTtsModel: process.env.GEMINI_TTS_MODEL ?? "gemini-2.5-flash-tts",
+  // Gemini-API TTS model (the Vertex name gemini-2.5-flash-tts 404s on the API);
+  // gemini-3.1-flash-tts-preview returns PCM s16le @24kHz mono → pcmToWav.
+  geminiTtsModel: process.env.GEMINI_TTS_MODEL ?? "gemini-3.1-flash-tts-preview",
   geminiTtsVoice: process.env.GEMINI_TTS_VOICE ?? "Kore",
   geminiEmbeddingDimensions: Number(process.env.GEMINI_EMBEDDING_DIMENSIONS ?? 1536),
   geminiChatMaxOutputTokens: Number(process.env.GEMINI_CHAT_MAX_OUTPUT_TOKENS ?? 8192),

@@ -39,15 +39,22 @@ export function getVertexCredentials(): ServiceAccountCredentials | undefined {
   }
 }
 
+/**
+ * Returns the shared GoogleGenAI client in **Gemini API (apiKey) mode**.
+ *
+ * Billing routes through the Gemini API SKU, which the $1,000 GenAI App Builder
+ * credit covers — unlike `vertexai: true`, which bills as "Vertex AI" (not
+ * covered). The function name is kept for call-site compatibility.
+ */
 export function getVertexClient(): GoogleGenAI {
   if (!client) {
-    const credentials = getVertexCredentials();
-    client = new GoogleGenAI({
-      vertexai: true,
-      project: config.gcpProjectId,
-      location: config.gcpLocation,
-      ...(credentials ? { googleAuthOptions: { credentials } } : {}),
-    });
+    if (!config.geminiApiKey) {
+      throw new HttpError(
+        500,
+        "GEMINI_API_KEY is not set — required for Gemini API access",
+      );
+    }
+    client = new GoogleGenAI({ apiKey: config.geminiApiKey });
   }
   return client;
 }
