@@ -24,8 +24,16 @@ import {
   toolDeclarations,
 } from "./chat-tools";
 import { checkAndBumpChatLimit } from "./chat-rate-limit";
-import { getChatAttachments } from "../repositories/chat-attachments";
+import {
+  getChatAttachments,
+  getChatAttachmentById,
+  markChatAttachmentStatus,
+  claimImageAttachmentForSend,
+  type ChatAttachmentRow,
+} from "../repositories/chat-attachments";
 import { rsServerClient } from "./rs-server-client";
+import type { WaybillExtraction, WaybillItemFields } from "./waybill-vision";
+import { createHash } from "crypto";
 
 interface DocumentContext {
   bookId: string;
@@ -571,6 +579,176 @@ function payrollPreviewText(action: PayrollPendingAction, attachmentWarnings: st
   ].join("\n");
 }
 
+// ── Waybill-from-photo workflow ──────────────────────────────────────────
+
+interface WaybillPendingAction {
+  type: "waybill_send";
+  status: "pending";
+  attachmentId: string;
+  approvalId: string; // == attachmentId; the frontend keys confirm state on approvalId
+  snapshotHash: string;
+  buyerName: string;
+  buyerTin: string;
+  sellerName?: string;
+  startAddress?: string;
+  endAddress?: string;
+  itemCount: number;
+  totalAmount: number;
+  items: Array<{ name: string; quantity: number; price: number; unit?: string }>;
+  warnings: string[];
+}
+
+/** Coerce a stored attachment `parsed_data` blob back into a WaybillExtraction. */
+function asWaybillExtraction(value: unknown): WaybillExtraction {
+  const o = asJsonObject(value);
+  const items: WaybillItemFields[] = Array.isArray(o.items)
+    ? o.items
+        .map((raw): WaybillItemFields | null => {
+          const item = asJsonObject(raw);
+          const name = typeof item.w_name === "string" ? item.w_name : "";
+          if (!name) return null;
+          const entry: WaybillItemFields = {
+            w_name: name,
+            quantity: Number(item.quantity) || 0,
+            price: Number(item.price) || 0,
+          };
+          if (typeof item.unit_txt === "string") entry.unit_txt = item.unit_txt;
+          return entry;
+        })
+        .filter((i): i is WaybillItemFields => i !== null)
+    : [];
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  return {
+    is_waybill: o.is_waybill !== false && items.length > 0,
+    confidence: Number(o.confidence) || 0,
+    seller_name: str(o.seller_name),
+    seller_tin: str(o.seller_tin),
+    buyer_name: str(o.buyer_name),
+    buyer_tin: str(o.buyer_tin),
+    start_address: str(o.start_address),
+    end_address: str(o.end_address),
+    driver_name: str(o.driver_name),
+    driver_tin: str(o.driver_tin),
+    car_number: str(o.car_number),
+    document_number: str(o.document_number),
+    begin_date: str(o.begin_date),
+    items,
+    warnings: Array.isArray(o.warnings) ? o.warnings.map(String).filter(Boolean) : [],
+  };
+}
+
+/**
+ * Stable hash of the fields that get filed to rs.ge. Lets the confirm step
+ * detect that the data the user approved still matches the stored attachment
+ * (defends against a re-upload race between preview and confirm).
+ */
+function waybillSnapshotHash(extraction: WaybillExtraction): string {
+  const canonical = JSON.stringify({
+    buyer_tin: extraction.buyer_tin ?? "",
+    buyer_name: extraction.buyer_name ?? "",
+    start_address: extraction.start_address ?? "",
+    end_address: extraction.end_address ?? "",
+    items: extraction.items.map((i) => [i.w_name, i.quantity, i.price, i.unit_txt ?? ""]),
+  });
+  return createHash("sha256").update(canonical).digest("hex");
+}
+
+function waybillPreviewText(action: WaybillPendingAction, extraction: WaybillExtraction): string {
+  const money = (value: number) =>
+    new Intl.NumberFormat("ka-GE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+  const lines = action.items
+    .slice(0, 10)
+    .map((i) => `- ${i.name}: ${i.quantity} × ${money(i.price)} = ${money(i.quantity * i.price)} GEL`);
+  const moreCount = action.items.length - Math.min(action.items.length, 10);
+  return [
+    "ფოტოდან ზედნადები წავიკითხე. გადაამოწმეთ მონაცემები და დაადასტურეთ გასაგზავნად.",
+    "",
+    `მყიდველი: ${action.buyerName || "—"}${action.buyerTin ? ` (ს/კ ${action.buyerTin})` : ""}`,
+    ...(action.startAddress ? [`გაგზავნის მისამართი: ${action.startAddress}`] : []),
+    ...(action.endAddress ? [`ჩაბარების მისამართი: ${action.endAddress}`] : []),
+    "",
+    `საქონელი (${action.itemCount}):`,
+    ...lines,
+    ...(moreCount > 0 ? [`… და კიდევ ${moreCount} პოზიცია`] : []),
+    "",
+    `ჯამი: ${money(action.totalAmount)} GEL`,
+    ...(action.warnings.length ? ["", "გასათვალისწინებელი:", ...action.warnings.map((w) => `- ${w}`)] : []),
+    "",
+    "ქვემოთ მოცემული ღილაკით გააგზავნეთ rs.ge-ზე.",
+  ].join("\n");
+}
+
+/**
+ * Build the assistant reply + confirm card from an uploaded waybill photo.
+ * Reads the extraction stored on the attachment at upload time (no re-vision).
+ * Returns NO pendingAction when the image isn't a usable waybill or the buyer
+ * TIN (required by rs.ge) couldn't be read — in those cases the user is asked
+ * to clarify rather than shown a send button.
+ */
+function buildWaybillWorkflowResult(imageAttachments: ChatAttachmentRow[]): {
+  text: string;
+  pendingAction?: WaybillPendingAction;
+} {
+  const chosen =
+    imageAttachments.find((a) => a.status !== "rejected") ??
+    imageAttachments[imageAttachments.length - 1];
+  if (chosen.status === "sent") {
+    return {
+      text: "ეს ზედნადები უკვე გაგზავნილია rs.ge-ზე.",
+    };
+  }
+  const extraction = asWaybillExtraction(chosen.parsed_data);
+
+  if (!extraction.is_waybill || extraction.items.length === 0) {
+    return {
+      text: [
+        "ამ ფოტოზე ზედნადები ვერ ამოვიცანი.",
+        "გთხოვთ ატვირთოთ ზედნადების მკაფიო ფოტო, სადაც ჩანს მყიდველი, საქონელი, რაოდენობა და ფასი.",
+      ].join("\n"),
+    };
+  }
+
+  if (!extraction.buyer_tin) {
+    return {
+      text: [
+        "ფოტოდან ზედნადები წავიკითხე, მაგრამ მყიდველის საიდენტიფიკაციო ნომერი (ს/კ) ვერ ამოვიკითხე — ის rs.ge-ზე გასაგზავნად აუცილებელია.",
+        "გთხოვთ ატვირთოთ ფოტო, სადაც მყიდველის ს/კ მკაფიოდ ჩანს.",
+        ...(extraction.warnings.length ? ["", ...extraction.warnings.map((w) => `- ${w}`)] : []),
+      ].join("\n"),
+    };
+  }
+
+  const total = extraction.items.reduce((sum, i) => sum + i.quantity * i.price, 0);
+  const warnings = [...extraction.warnings];
+  if (extraction.confidence > 0 && extraction.confidence < 0.6) {
+    warnings.unshift("ამოკითხვის სანდოობა დაბალია — განსაკუთრებით ყურადღებით გადაამოწმეთ.");
+  }
+
+  const action: WaybillPendingAction = {
+    type: "waybill_send",
+    status: "pending",
+    attachmentId: chosen.id,
+    approvalId: chosen.id,
+    snapshotHash: waybillSnapshotHash(extraction),
+    buyerName: extraction.buyer_name ?? "",
+    buyerTin: extraction.buyer_tin,
+    sellerName: extraction.seller_name,
+    startAddress: extraction.start_address,
+    endAddress: extraction.end_address,
+    itemCount: extraction.items.length,
+    totalAmount: +total.toFixed(2),
+    items: extraction.items.slice(0, 20).map((i) => ({
+      name: i.w_name,
+      quantity: i.quantity,
+      price: i.price,
+      unit: i.unit_txt,
+    })),
+    warnings,
+  };
+
+  return { text: waybillPreviewText(action, extraction), pendingAction: action };
+}
+
 async function runToolLoop(
   gemini: GeminiService,
   systemInstruction: string,
@@ -761,9 +939,15 @@ export async function sendConversationMessage(
   const payrollAttachments = attachments.filter(
     (attachment) => attachment.kind === "payroll_spreadsheet",
   );
-  const diagnosticMode = payrollAttachments.length
-    ? true
-    : looksLikeDiagnosticQuery(content);
+  const imageAttachments = attachments.filter(
+    (attachment) => attachment.kind === "image",
+  );
+  // Attachment-driven workflows (payroll sheet, waybill photo) answer from the
+  // uploaded data, not the book corpus — skip the slow RAG embed.
+  const diagnosticMode =
+    payrollAttachments.length || imageAttachments.length
+      ? true
+      : looksLikeDiagnosticQuery(content);
 
   // Diagnostic queries skip the RAG embed: the answer lives in live data,
   // not the book corpus, and the embed call is the slowest single step.
@@ -785,8 +969,17 @@ export async function sendConversationMessage(
   let assistant: { text: string; model: string };
   let toolTrace: ChatToolTraceEntry[] = [];
   let toolIterations = 0;
+  let pendingActionForMessage: PayrollPendingAction | WaybillPendingAction | undefined;
   try {
-    if (payrollAttachments.length) {
+    if (imageAttachments.length) {
+      const waybillResult = buildWaybillWorkflowResult(imageAttachments);
+      assistant = {
+        text: waybillResult.text,
+        model: "declario-waybill-vision-v1",
+      };
+      pendingActionForMessage = waybillResult.pendingAction;
+      toolIterations = 1;
+    } else if (payrollAttachments.length) {
       const employees = payrollAttachments.flatMap((attachment) => {
         const parsed = asJsonObject(attachment.parsed_data);
         return Array.isArray(parsed.employees)
@@ -848,6 +1041,7 @@ export async function sendConversationMessage(
         text: payrollPreviewText(action, attachmentWarnings),
         model: "declario-payroll-workflow-v1",
       };
+      pendingActionForMessage = action;
       toolIterations = 2;
     } else {
     const baseMessages = buildGeminiMessages({ history, context, content });
@@ -863,6 +1057,7 @@ export async function sendConversationMessage(
     assistant = { text: toolLoopResult.text, model: toolLoopResult.model };
     toolTrace = toolLoopResult.trace;
     toolIterations = toolLoopResult.iterations;
+    pendingActionForMessage = pendingPayrollAction(toolTrace);
     }
   } catch (error) {
     console.error("[chat] Gemini generateContent failed:", error);
@@ -876,8 +1071,8 @@ export async function sendConversationMessage(
     assistantContent: assistant.text,
     assistantModel: assistant.model,
     assistantMetadata: {
-      pendingAction: pendingPayrollAction(toolTrace),
-      attachments: payrollAttachments.map((attachment) => ({
+      pendingAction: pendingActionForMessage,
+      attachments: [...payrollAttachments, ...imageAttachments].map((attachment) => ({
         id: attachment.id,
         name: attachment.original_name,
         kind: attachment.kind,
@@ -972,6 +1167,115 @@ export async function confirmPayrollAction(input: {
   });
 }
 
+export async function confirmWaybillAction(input: {
+  companyId: string;
+  conversationId: string;
+  userId?: string;
+  attachmentId: string;
+  snapshotHash?: string;
+}) {
+  const conversation = await getConversation(input.companyId, input.conversationId);
+  if (!conversation) throw new HttpError(404, "Conversation not found");
+  if (conversation.user_id && input.userId && conversation.user_id !== input.userId) {
+    throw new HttpError(403, "Conversation belongs to another user");
+  }
+
+  const attachment = await getChatAttachmentById({
+    companyId: input.companyId,
+    conversationId: input.conversationId,
+    attachmentId: input.attachmentId,
+    userId: input.userId,
+  });
+  if (!attachment || attachment.kind !== "image") {
+    throw new HttpError(404, "Waybill attachment not found");
+  }
+
+  // Idempotency: a second confirm (double-click / retry) must NOT file a
+  // second waybill on rs.ge. Once sent, return the stored result.
+  if (attachment.status === "sent") {
+    const prior = asJsonObject(attachment.parsed_data).sent_result;
+    return { alreadySent: true, result: prior ?? null };
+  }
+
+  const extraction = asWaybillExtraction(attachment.parsed_data);
+  if (!extraction.is_waybill || extraction.items.length === 0) {
+    throw new HttpError(400, "This attachment isn't a recognized waybill");
+  }
+  if (!extraction.buyer_tin) {
+    throw new HttpError(400, "Buyer TIN is missing — cannot file the waybill");
+  }
+  if (input.snapshotHash && waybillSnapshotHash(extraction) !== input.snapshotHash) {
+    throw new HttpError(
+      409,
+      "The waybill data changed since you reviewed it — re-check and try again",
+    );
+  }
+
+  // Atomic claim: flip 'parsed' → 'sent' so a concurrent confirm (double
+  // click) can't file the same waybill twice on rs.ge.
+  const claimed = await claimImageAttachmentForSend({
+    companyId: input.companyId,
+    attachmentId: attachment.id,
+  });
+  if (!claimed) {
+    const fresh = await getChatAttachmentById({
+      companyId: input.companyId,
+      conversationId: input.conversationId,
+      attachmentId: input.attachmentId,
+      userId: input.userId,
+    });
+    return {
+      alreadySent: true,
+      result: asJsonObject(fresh?.parsed_data).sent_result ?? null,
+    };
+  }
+
+  const payload = {
+    reference: `photo:${attachment.id}`,
+    send: true,
+    buyer_tin: extraction.buyer_tin,
+    buyer_name: extraction.buyer_name ?? "",
+    start_address: extraction.start_address,
+    end_address: extraction.end_address,
+    driver_tin: extraction.driver_tin,
+    driver_name: extraction.driver_name,
+    car_number: extraction.car_number,
+    begin_date: extraction.begin_date,
+    items: extraction.items.map((i) => ({
+      w_name: i.w_name,
+      unit_txt: i.unit_txt,
+      quantity: i.quantity,
+      price: i.price,
+    })),
+  };
+
+  let result: Record<string, unknown>;
+  try {
+    result = await rsServerClient.post<Record<string, unknown>>(
+      "/internal/tools/waybills/save-and-send",
+      { companyId: input.companyId, userId: input.userId, body: payload },
+    );
+  } catch (error) {
+    // Pre-send failure (e.g. rs.ge validation rejected it, no waybill was
+    // created) — release the claim so the user can fix and retry.
+    await markChatAttachmentStatus({
+      companyId: input.companyId,
+      attachmentId: attachment.id,
+      status: "parsed",
+    }).catch(() => undefined);
+    throw error;
+  }
+
+  await markChatAttachmentStatus({
+    companyId: input.companyId,
+    attachmentId: attachment.id,
+    status: "sent",
+    mergeParsedData: { sent_result: result },
+  });
+
+  return result;
+}
+
 export const chatService = {
   createConversation,
   deleteConversation,
@@ -979,4 +1283,5 @@ export const chatService = {
   getMessages,
   sendConversationMessage,
   confirmPayrollAction,
+  confirmWaybillAction,
 };
