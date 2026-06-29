@@ -61,6 +61,32 @@ function validationWarning(reason: string): ValidationIssue[] {
   return [{ field: "validation", value: "", level: "warn", reason }];
 }
 
+// Gemini intermittently returns 503 "high demand" / UNAVAILABLE during spikes.
+// Without a retry a single spike hard-fails the whole chat turn (→ 502 to the
+// user). Retry transient errors a few times with exponential backoff + jitter.
+const TRANSIENT_LLM_RE =
+  /\b(429|500|502|503|504)\b|high demand|overloaded|unavailable|resource exhausted/i;
+
+function isTransientLlmError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return TRANSIENT_LLM_RE.test(message);
+}
+
+async function withLlmRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientLlmError(error) || attempt === attempts - 1) throw error;
+      const backoffMs = 400 * 2 ** attempt + Math.floor(Math.random() * 250);
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
+  throw lastError;
+}
+
 // ── Implement GeminiService interface ─────────────────────────────────────────
 export const geminiService: GeminiService = {
   // ── Embeddings ──
@@ -79,14 +105,16 @@ export const geminiService: GeminiService = {
 
   // ── Chat ──
   async generateChatResponse(messages: Content[]): Promise<{ text: string; model: string }> {
-    const response = await getVertexClient().models.generateContent({
-      model: config.geminiChatModel,
-      contents: messages,
-      config: {
-        maxOutputTokens: config.geminiChatMaxOutputTokens,
-        temperature: config.geminiChatTemperature,
-      },
-    });
+    const response = await withLlmRetry(() =>
+      getVertexClient().models.generateContent({
+        model: config.geminiChatModel,
+        contents: messages,
+        config: {
+          maxOutputTokens: config.geminiChatMaxOutputTokens,
+          temperature: config.geminiChatTemperature,
+        },
+      }),
+    );
     const text = response.text?.trim();
     if (!text) throw new Error("Vertex AI chat response returned empty text");
     return { text, model: response.modelVersion ?? config.geminiChatModel };
@@ -97,17 +125,19 @@ export const geminiService: GeminiService = {
     const modeMap: Record<string, string> = { any: "ANY", none: "NONE", auto: "AUTO" };
     const mode = modeMap[input.toolChoice ?? "auto"] ?? "AUTO";
 
-    const response = await getVertexClient().models.generateContent({
-      model: config.geminiChatModel,
-      contents: input.contents,
-      config: {
-        maxOutputTokens: input.maxOutputTokens ?? config.geminiChatMaxOutputTokens,
-        temperature: input.temperature ?? config.geminiChatTemperature,
-        ...(input.systemInstruction ? { systemInstruction: input.systemInstruction } : {}),
-        tools: [{ functionDeclarations: input.tools }],
-        toolConfig: { functionCallingConfig: { mode: mode as never } },
-      },
-    });
+    const response = await withLlmRetry(() =>
+      getVertexClient().models.generateContent({
+        model: config.geminiChatModel,
+        contents: input.contents,
+        config: {
+          maxOutputTokens: input.maxOutputTokens ?? config.geminiChatMaxOutputTokens,
+          temperature: input.temperature ?? config.geminiChatTemperature,
+          ...(input.systemInstruction ? { systemInstruction: input.systemInstruction } : {}),
+          tools: [{ functionDeclarations: input.tools }],
+          toolConfig: { functionCallingConfig: { mode: mode as never } },
+        },
+      }),
+    );
 
     const functionCalls = response.functionCalls ?? [];
     return {
@@ -120,19 +150,21 @@ export const geminiService: GeminiService = {
 
   // ── Structured JSON ──
   async generateStructured(input): Promise<{ text: string; model: string }> {
-    const response = await getVertexClient().models.generateContent({
-      model: config.geminiChatModel,
-      contents: [
-        { role: "user", parts: [{ text: input.systemPrompt }] },
-        { role: "user", parts: [{ text: input.userText }] },
-      ],
-      config: {
-        maxOutputTokens: input.maxOutputTokens ?? 4096,
-        temperature: input.temperature ?? 0.1,
-        responseMimeType: "application/json",
-        ...(input.responseSchema ? { responseSchema: input.responseSchema as never } : {}),
-      },
-    });
+    const response = await withLlmRetry(() =>
+      getVertexClient().models.generateContent({
+        model: config.geminiChatModel,
+        contents: [
+          { role: "user", parts: [{ text: input.systemPrompt }] },
+          { role: "user", parts: [{ text: input.userText }] },
+        ],
+        config: {
+          maxOutputTokens: input.maxOutputTokens ?? 4096,
+          temperature: input.temperature ?? 0.1,
+          responseMimeType: "application/json",
+          ...(input.responseSchema ? { responseSchema: input.responseSchema as never } : {}),
+        },
+      }),
+    );
     const text = response.text?.trim();
     if (!text) throw new Error("Vertex AI structured response returned empty text");
     return { text, model: response.modelVersion ?? config.geminiChatModel };
