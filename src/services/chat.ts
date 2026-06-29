@@ -90,10 +90,28 @@ function asJsonObject(value: unknown): Record<string, unknown> {
   return {};
 }
 
+// Greetings, presence checks ("are you there?"), thanks and short
+// acknowledgements are conversational — they should get a normal brief reply,
+// not a domain refusal. Substantive off-topic questions are still caught (the
+// in-scope regex below + the model's own scope instruction handle those).
 function isGreetingOrCapabilityQuestion(text: string): boolean {
   const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
   return (
-    /^(hi|hello|hey|გამარჯობა|სალამი|გაუმარჯოს)[\s!.?]*$/i.test(normalized) ||
+    // Greetings (whole message is just a greeting).
+    /^(hi|hello|hey|hiya|yo|გამარჯობა|გამარჯობათ|სალამი|გაუმარჯოს|ჰაი|ჰელ(ო|ოუ)|ჰეი)[\s!.?…]*$/i.test(
+      normalized,
+    ) ||
+    // Presence / "are you there?" (may appear mid-sentence — benign).
+    /(აქ\s*ხ(ა|არ)|აქა\s*ხარ|ხარ\s*აქ|მისმენ|გესმი|are you (there|here|around|alive)|you (still )?there|still (there|here)|hello\?|anybody|anyone there)/i.test(
+      normalized,
+    ) ||
+    // Thanks / acknowledgement / sign-off (whole message only, so it can't
+    // smuggle an off-topic question through).
+    /^(გმადლობ\w*|მადლობ\w*|დიდი მადლობა|გასაგებია|კარგი|კაი|ოკ\w*|okay|ok|thanks|thank you|ty|got it|nice|cool|ნახვამდის|bye)[\s!.?…]*$/i.test(
+      normalized,
+    ) ||
+    // Capability questions.
     /(what can you do|help me|your capabilities|შეგიძლია|რას აკეთებ|რაში დამეხმარები|რა იცი|რა ცოდნა გაქვს)/i.test(
       normalized,
     )
