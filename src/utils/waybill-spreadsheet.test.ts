@@ -121,4 +121,47 @@ describe("parseWaybillSpreadsheet", () => {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("parses Georgian waybill type labels", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "declario-waybill-test-"));
+    const file = path.join(dir, "typed-waybills.xlsx");
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Waybills");
+    sheet.addRow([
+      "Document Number",
+      "ზედნადების ტიპი",
+      "Buyer TIN",
+      "Buyer Name",
+      "Start Address",
+      "End Address",
+      "Item Name",
+      "Quantity",
+      "Unit Price",
+    ]);
+    sheet.addRow([
+      "RET-1",
+      "უკან დაბრუნება",
+      "123456789",
+      "Buyer A",
+      "Batumi",
+      "Tbilisi",
+      "Returned goods",
+      1,
+      12,
+    ]);
+    await workbook.xlsx.writeFile(file);
+
+    try {
+      const parsed = await parseWaybillSpreadsheet(file, "typed-waybills.xlsx");
+      expect(parsed.columnMapping.waybill_type).toBe("ზედნადების ტიპი");
+      expect(parsed.drafts).toHaveLength(1);
+      expect(parsed.drafts[0]).toMatchObject({
+        reference: "RET-1",
+        waybill_type: 5,
+        waybill_type_label: "უკან დაბრუნება",
+      });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });

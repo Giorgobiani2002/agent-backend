@@ -10,6 +10,8 @@ export interface WaybillSpreadsheetItem {
 
 export interface WaybillSpreadsheetDraft {
   reference: string;
+  waybill_type?: number;
+  waybill_type_label?: string;
   buyer_name?: string;
   buyer_tin?: string;
   start_address?: string;
@@ -63,6 +65,17 @@ const COLUMN_ALIASES = {
     "შეკვეთის ნომერი",
     "ნომერი",
     "ჯგუფი",
+  ],
+  waybill_type: [
+    "waybill type",
+    "type",
+    "ზედნადების ტიპი",
+    "ტიპი",
+    "შიდა გადაზიდვა",
+    "ტრანსპორტირება",
+    "ტრანსპორტირების გარეშე",
+    "დისტრიბუცია",
+    "უკან დაბრუნება",
   ],
   buyer_name: [
     "buyer",
@@ -174,6 +187,19 @@ const COLUMN_ALIASES = {
 } as const;
 
 type WaybillColumn = keyof typeof COLUMN_ALIASES;
+
+function parseWaybillType(value: string): number | undefined {
+  const text = value.trim().toLowerCase();
+  if (!text) return undefined;
+  const n = Number(text);
+  if (Number.isInteger(n) && n >= 1 && n <= 6) return n;
+  if (/უკან\s*დაბრუნ|დაბრუნებ|return/.test(text)) return 5;
+  if (/დისტრიბუც|distribution/.test(text)) return 4;
+  if (/ტრანსპორტირების\s*გარეშე|without\s*transport/.test(text)) return 3;
+  if (/შიდა\s*გადაზიდ|inner|internal/.test(text)) return 1;
+  if (/ტრანსპორტირებ|გადაზიდ|transport/.test(text)) return 2;
+  return undefined;
+}
 
 function normalizeHeader(value: string): string {
   return value
@@ -325,7 +351,12 @@ function mergeDraftField(
   draft: WaybillSpreadsheetDraft,
   field: keyof Omit<
     WaybillSpreadsheetDraft,
-    "reference" | "items" | "source_rows" | "total_amount" | "warnings"
+    | "reference"
+    | "waybill_type"
+    | "items"
+    | "source_rows"
+    | "total_amount"
+    | "warnings"
   >,
   value: string,
   label: string,
@@ -407,6 +438,8 @@ export async function parseWaybillSpreadsheet(
     const priceText = valueAt(row, header.columnByField, "price");
     const buyerTin = normalizeTinText(valueAt(row, header.columnByField, "buyer_tin"));
     const buyerName = valueAt(row, header.columnByField, "buyer_name");
+    const waybillTypeText = valueAt(row, header.columnByField, "waybill_type");
+    const waybillType = parseWaybillType(waybillTypeText);
     const startAddress = valueAt(row, header.columnByField, "start_address");
     const endAddress = valueAt(row, header.columnByField, "end_address");
     const reference =
@@ -442,6 +475,8 @@ export async function parseWaybillSpreadsheet(
     if (!draft) {
       draft = {
         reference: fallbackReference,
+        waybill_type: waybillType,
+        waybill_type_label: waybillTypeText || undefined,
         buyer_name: buyerName || undefined,
         buyer_tin: buyerTin || undefined,
         start_address: startAddress || undefined,
@@ -462,6 +497,14 @@ export async function parseWaybillSpreadsheet(
     } else {
       mergeDraftField(draft, "buyer_name", buyerName, "Buyer name");
       mergeDraftField(draft, "buyer_tin", buyerTin, "Buyer TIN");
+      if (waybillType && !draft.waybill_type) {
+        draft.waybill_type = waybillType;
+        draft.waybill_type_label = waybillTypeText || undefined;
+      } else if (waybillType && draft.waybill_type !== waybillType) {
+        draft.warnings.push(
+          `Waybill type differs across grouped rows; keeping "${draft.waybill_type}".`,
+        );
+      }
       mergeDraftField(draft, "start_address", startAddress, "Start address");
       mergeDraftField(draft, "end_address", endAddress, "End address");
       mergeDraftField(

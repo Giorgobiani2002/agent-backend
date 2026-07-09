@@ -44,6 +44,13 @@ import {
   isSendableWaybillDraft,
   type WaybillSpreadsheetDraft,
 } from "../utils/waybill-spreadsheet";
+import {
+  DEFAULT_WAYBILL_TYPE,
+  inferWaybillTypeFromText,
+  normalizeWaybillType,
+  validateWaybillForRs,
+  waybillTypeLabelKa,
+} from "../utils/waybill-types";
 import { createHash } from "crypto";
 
 interface DocumentContext {
@@ -649,6 +656,8 @@ interface WaybillPendingAction {
   snapshotHash: string;
   buyerName: string;
   buyerTin: string;
+  waybillType: number;
+  waybillTypeLabel: string;
   sellerName?: string;
   startAddress?: string;
   endAddress?: string;
@@ -671,6 +680,8 @@ interface WaybillSpreadsheetPendingAction {
     reference: string;
     buyerName: string;
     buyerTin: string;
+    waybillType: number;
+    waybillTypeLabel: string;
     itemCount: number;
     totalAmount: number;
     warnings: string[];
@@ -701,6 +712,10 @@ function asWaybillExtraction(value: unknown): WaybillExtraction {
   return {
     is_waybill: o.is_waybill !== false && items.length > 0,
     confidence: Number(o.confidence) || 0,
+    waybill_type:
+      normalizeWaybillType(o.waybill_type) ??
+      inferWaybillTypeFromText([str(o.waybill_type_label), str(o.document_number), str(o.comment)].filter(Boolean).join(" ")),
+    waybill_type_label: str(o.waybill_type_label),
     seller_name: str(o.seller_name),
     seller_tin: str(o.seller_tin),
     buyer_name: str(o.buyer_name),
@@ -726,6 +741,7 @@ function waybillSnapshotHash(extraction: WaybillExtraction): string {
   const canonical = JSON.stringify({
     buyer_tin: extraction.buyer_tin ?? "",
     buyer_name: extraction.buyer_name ?? "",
+    waybill_type: normalizeWaybillType(extraction.waybill_type) ?? DEFAULT_WAYBILL_TYPE,
     start_address: extraction.start_address ?? "",
     end_address: extraction.end_address ?? "",
     items: extraction.items.map((i) => [i.w_name, i.quantity, i.price, i.unit_txt ?? ""]),
@@ -743,6 +759,7 @@ function waybillPreviewText(action: WaybillPendingAction, extraction: WaybillExt
   return [
     "ფოტოდან ზედნადები წავიკითხე. ჯერ გადაამოწმეთ მონაცემები; rs.ge-ზე გაგზავნას მხოლოდ თქვენი დადასტურების შემდეგ გავაკეთებ.",
     "",
+    `ზედნადების ტიპი: ${action.waybillTypeLabel}`,
     `მყიდველი: ${action.buyerName || "—"}${action.buyerTin ? ` (ს/კ ${action.buyerTin})` : ""}`,
     ...(action.startAddress ? [`გაგზავნის მისამართი: ${action.startAddress}`] : []),
     ...(action.endAddress ? [`ჩაბარების მისამართი: ${action.endAddress}`] : []),
@@ -800,6 +817,24 @@ function buildWaybillWorkflowResult(imageAttachments: ChatAttachmentRow[]): {
 
   const total = extraction.items.reduce((sum, i) => sum + i.quantity * i.price, 0);
   const warnings = [...extraction.warnings];
+  const waybillType = normalizeWaybillType(extraction.waybill_type) ?? DEFAULT_WAYBILL_TYPE;
+  if (!normalizeWaybillType(extraction.waybill_type)) {
+    warnings.unshift(
+      `ზედნადების ტიპი ფოტოდან მკაფიოდ ვერ ამოვიცანი — დროებით მონიშნულია "${waybillTypeLabelKa(waybillType)}". თუ სხვა ტიპია, მომწერეთ შესწორება.`,
+    );
+  }
+  const validationErrors = validateWaybillForRs({
+    type: waybillType,
+    buyer_tin: extraction.buyer_tin,
+    buyer_name: extraction.buyer_name,
+    start_address: extraction.start_address,
+    end_address: extraction.end_address,
+    driver_tin: extraction.driver_tin,
+    driver_name: extraction.driver_name,
+    car_number: extraction.car_number,
+    items: extraction.items,
+  });
+  warnings.push(...validationErrors);
   if (extraction.confidence > 0 && extraction.confidence < 0.6) {
     warnings.unshift("ამოკითხვის სანდოობა დაბალია — განსაკუთრებით ყურადღებით გადაამოწმეთ.");
   }
@@ -812,6 +847,8 @@ function buildWaybillWorkflowResult(imageAttachments: ChatAttachmentRow[]): {
     snapshotHash: waybillSnapshotHash(extraction),
     buyerName: extraction.buyer_name ?? "",
     buyerTin: extraction.buyer_tin,
+    waybillType,
+    waybillTypeLabel: waybillTypeLabelKa(waybillType),
     sellerName: extraction.seller_name,
     startAddress: extraction.start_address,
     endAddress: extraction.end_address,
@@ -863,6 +900,11 @@ function asWaybillSpreadsheetDrafts(value: unknown): {
             reference: str(d.reference) ?? `draft-${idx + 1}`,
             buyer_name: str(d.buyer_name),
             buyer_tin: str(d.buyer_tin),
+            waybill_type:
+              normalizeWaybillType(d.waybill_type) ??
+              inferWaybillTypeFromText([str(d.waybill_type_label), str(d.document_number), str(d.reference)].filter(Boolean).join(" ")) ??
+              DEFAULT_WAYBILL_TYPE,
+            waybill_type_label: str(d.waybill_type_label),
             start_address: str(d.start_address),
             end_address: str(d.end_address),
             driver_name: str(d.driver_name),
@@ -891,6 +933,8 @@ function waybillExtractionFromSpreadsheetDraft(
   return {
     is_waybill: draft.items.length > 0,
     confidence: 1,
+    waybill_type: draft.waybill_type,
+    waybill_type_label: draft.waybill_type_label,
     buyer_name: draft.buyer_name,
     buyer_tin: draft.buyer_tin,
     start_address: draft.start_address,
@@ -926,6 +970,7 @@ function waybillSpreadsheetSnapshotHash(drafts: WaybillSpreadsheetDraft[]): stri
       reference: draft.reference,
       buyer_tin: draft.buyer_tin ?? "",
       buyer_name: draft.buyer_name ?? "",
+      waybill_type: normalizeWaybillType(draft.waybill_type) ?? DEFAULT_WAYBILL_TYPE,
       start_address: draft.start_address ?? "",
       end_address: draft.end_address ?? "",
       items: draft.items.map((i) => [i.w_name, i.quantity, i.price, i.unit_txt ?? ""]),
@@ -941,7 +986,7 @@ function waybillSpreadsheetPreviewText(
     new Intl.NumberFormat("ka-GE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
   const rows = action.preview.map(
     (draft) =>
-      `- ${draft.reference}: ${draft.buyerName || "მყიდველი"} (ს/კ ${draft.buyerTin}) · ${draft.itemCount} პოზიცია · ${money(draft.totalAmount)} GEL`,
+      `- ${draft.reference}: ${draft.waybillTypeLabel} · ${draft.buyerName || "მყიდველი"} (ს/კ ${draft.buyerTin}) · ${draft.itemCount} პოზიცია · ${money(draft.totalAmount)} GEL`,
   );
   const more = action.waybillCount - action.preview.length;
   return [
@@ -982,7 +1027,21 @@ function buildWaybillSpreadsheetWorkflowResult(attachments: ChatAttachmentRow[])
     };
   }
 
-  const invalidDrafts = drafts.filter((draft) => !isSendableWaybillDraft(draft));
+  const invalidDrafts = drafts.filter(
+    (draft) =>
+      !isSendableWaybillDraft(draft) ||
+      validateWaybillForRs({
+        type: normalizeWaybillType(draft.waybill_type) ?? DEFAULT_WAYBILL_TYPE,
+        buyer_tin: draft.buyer_tin,
+        buyer_name: draft.buyer_name,
+        start_address: draft.start_address,
+        end_address: draft.end_address,
+        driver_tin: draft.driver_tin,
+        driver_name: draft.driver_name,
+        car_number: draft.car_number,
+        items: draft.items,
+      }).length > 0,
+  );
   if (invalidDrafts.length > 0) {
     const details = invalidDrafts.slice(0, 8).map((draft) => {
       const draftWarnings = draft.warnings.length
@@ -1023,6 +1082,8 @@ function buildWaybillSpreadsheetWorkflowResult(attachments: ChatAttachmentRow[])
       reference: draft.reference,
       buyerName: draft.buyer_name ?? "",
       buyerTin: draft.buyer_tin ?? "",
+      waybillType: normalizeWaybillType(draft.waybill_type) ?? DEFAULT_WAYBILL_TYPE,
+      waybillTypeLabel: waybillTypeLabelKa(normalizeWaybillType(draft.waybill_type) ?? DEFAULT_WAYBILL_TYPE),
       itemCount: draft.items.length,
       totalAmount: draft.total_amount,
       warnings: draft.warnings,
@@ -1589,6 +1650,21 @@ export async function confirmWaybillAction(input: {
   if (!extraction.buyer_tin) {
     throw new HttpError(400, "Buyer TIN is missing — cannot file the waybill");
   }
+  const waybillType = normalizeWaybillType(extraction.waybill_type) ?? DEFAULT_WAYBILL_TYPE;
+  const validationErrors = validateWaybillForRs({
+    type: waybillType,
+    buyer_tin: extraction.buyer_tin,
+    buyer_name: extraction.buyer_name,
+    start_address: extraction.start_address,
+    end_address: extraction.end_address,
+    driver_tin: extraction.driver_tin,
+    driver_name: extraction.driver_name,
+    car_number: extraction.car_number,
+    items: extraction.items,
+  });
+  if (validationErrors.length > 0) {
+    throw new HttpError(400, `Waybill is missing required fields: ${validationErrors.join("; ")}`);
+  }
   if (input.snapshotHash && waybillSnapshotHash(extraction) !== input.snapshotHash) {
     throw new HttpError(
       409,
@@ -1618,6 +1694,7 @@ export async function confirmWaybillAction(input: {
   const payload = {
     reference: `photo:${attachment.id}`,
     send: true,
+    waybill_type: waybillType,
     buyer_tin: extraction.buyer_tin,
     buyer_name: extraction.buyer_name ?? "",
     start_address: extraction.start_address,
@@ -1693,7 +1770,21 @@ export async function confirmWaybillSpreadsheetAction(input: {
   if (!drafts.length) {
     throw new HttpError(400, "This spreadsheet has no valid waybill drafts");
   }
-  const invalidDrafts = drafts.filter((draft) => !isSendableWaybillDraft(draft));
+  const invalidDrafts = drafts.filter(
+    (draft) =>
+      !isSendableWaybillDraft(draft) ||
+      validateWaybillForRs({
+        type: normalizeWaybillType(draft.waybill_type) ?? DEFAULT_WAYBILL_TYPE,
+        buyer_tin: draft.buyer_tin,
+        buyer_name: draft.buyer_name,
+        start_address: draft.start_address,
+        end_address: draft.end_address,
+        driver_tin: draft.driver_tin,
+        driver_name: draft.driver_name,
+        car_number: draft.car_number,
+        items: draft.items,
+      }).length > 0,
+  );
   if (invalidDrafts.length > 0) {
     throw new HttpError(
       400,
@@ -1733,6 +1824,7 @@ export async function confirmWaybillSpreadsheetAction(input: {
     const payload = {
       reference,
       send: true,
+      waybill_type: normalizeWaybillType(extraction.waybill_type) ?? DEFAULT_WAYBILL_TYPE,
       buyer_tin: extraction.buyer_tin,
       buyer_name: extraction.buyer_name ?? "",
       start_address: extraction.start_address,

@@ -25,6 +25,8 @@ export interface WaybillItemFields {
 export interface WaybillExtraction {
   is_waybill: boolean;
   confidence: number; // 0..1, model self-reported
+  waybill_type?: number;
+  waybill_type_label?: string;
   seller_name?: string;
   seller_tin?: string;
   buyer_name?: string;
@@ -48,6 +50,8 @@ const EXTRACTION_PROMPT = [
   "{",
   '  "is_waybill": boolean,            // false if the image is clearly NOT a waybill/delivery/goods document',
   '  "confidence": number,            // 0..1, your confidence the extraction is correct',
+  '  "waybill_type": number|null,      // 1=შიდა გადაზიდვა, 2=ტრანსპორტირება, 3=ტრანსპორტირების გარეშე, 4=დისტრიბუცია, 5=უკან დაბრუნება, 6=ქვე-ზედნადები',
+  '  "waybill_type_label": string|null,// exact visible/understood type label, if present',
   '  "seller_name": string|null,      // გამყიდველი / მომწოდებელი',
   '  "seller_tin": string|null,       // seller identification number (ს/კ, 9 or 11 digits)',
   '  "buyer_name": string|null,       // მყიდველი / მიმღები',
@@ -69,6 +73,7 @@ const EXTRACTION_PROMPT = [
   "- quantity and price MUST be plain numbers (no currency symbols, no thousands separators).",
   "- price is the UNIT price per item, not the line total. If only a line total is shown, divide by quantity.",
   "- Keep names and addresses in their original language (usually Georgian).",
+  "- If the document type is visible, set waybill_type. If unclear, leave it null and add a Georgian warning asking the user to choose the type.",
   "- If the document is not a waybill/goods document, set is_waybill=false and items=[].",
   "- If a number is unreadable, leave the field null and add a Georgian note to warnings.",
 ].join("\n");
@@ -131,6 +136,11 @@ function normalizeExtraction(parsed: Record<string, unknown>): WaybillExtraction
   return {
     is_waybill: parsed.is_waybill !== false && items.length > 0,
     confidence,
+    waybill_type:
+      Number.isInteger(Number(parsed.waybill_type)) && Number(parsed.waybill_type) >= 1 && Number(parsed.waybill_type) <= 6
+        ? Number(parsed.waybill_type)
+        : undefined,
+    waybill_type_label: toStringOrUndefined(parsed.waybill_type_label),
     seller_name: toStringOrUndefined(parsed.seller_name),
     seller_tin: toStringOrUndefined(parsed.seller_tin),
     buyer_name: toStringOrUndefined(parsed.buyer_name),
@@ -228,7 +238,7 @@ export async function applyWaybillCorrection(
     "If the user's message is NOT about changing this waybill (a question, chit-chat, or unrelated request), return the data UNCHANGED with changed=false.",
     "",
     "Return JSON ONLY in this shape (no markdown):",
-    '{ "changed": boolean, "waybill": { "is_waybill": boolean, "confidence": number, "seller_name": string|null, "seller_tin": string|null, "buyer_name": string|null, "buyer_tin": string|null, "start_address": string|null, "end_address": string|null, "driver_name": string|null, "driver_tin": string|null, "car_number": string|null, "document_number": string|null, "begin_date": string|null, "items": [{"w_name": string, "unit_txt": string|null, "quantity": number, "price": number}], "warnings": string[] } }',
+    '{ "changed": boolean, "waybill": { "is_waybill": boolean, "confidence": number, "waybill_type": number|null, "waybill_type_label": string|null, "seller_name": string|null, "seller_tin": string|null, "buyer_name": string|null, "buyer_tin": string|null, "start_address": string|null, "end_address": string|null, "driver_name": string|null, "driver_tin": string|null, "car_number": string|null, "document_number": string|null, "begin_date": string|null, "items": [{"w_name": string, "unit_txt": string|null, "quantity": number, "price": number}], "warnings": string[] } }',
     "Rules: quantity and price are plain numbers; price is per-unit. Keep Georgian text as-is. Preserve every field the user did NOT mention.",
     "",
     "CURRENT DATA:",
