@@ -13,6 +13,7 @@
  * by a human, not filed blindly. `confidence` + `warnings` surface doubt.
  */
 import { config } from "../config";
+import { HttpError } from "../errors";
 import { getVertexClient } from "./vertex";
 
 export interface WaybillItemFields {
@@ -43,7 +44,8 @@ export interface WaybillExtraction {
 }
 
 const EXTRACTION_PROMPT = [
-  "You are reading a photo or scan of a Georgian waybill / delivery document (ზედნადები / სასაქონლო ზеднадები).",
+  "You are reading a photo or scan of a waybill / delivery / goods shipment document.",
+  "The document is usually Georgian (ზედნადები / სასაქონლო ზედნადები), but it may also be an English test document labelled WAYBILL or DELIVERY DOCUMENT.",
   "Extract the shipment data and return it as a SINGLE JSON object. NO markdown, NO prose before or after.",
   "",
   "Return exactly this shape (omit a field or use null if it is not visible):",
@@ -83,6 +85,28 @@ function stripFences(text: string): string {
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/\s*```$/i, "")
     .trim();
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  const cleaned = stripFences(text);
+  const candidates = [cleaned];
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(cleaned.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const obj = JSON.parse(candidate);
+      if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+        return obj as Record<string, unknown>;
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
 }
 
 function toNumber(value: unknown): number {
@@ -126,6 +150,47 @@ function retryable(error: unknown): boolean {
   );
 }
 
+function retryDelayMs(attempt: number): number {
+  return Math.min(600 * 2 ** attempt, 5000);
+}
+
+function modelUnavailable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /403|404|permission[_\s-]?denied|denied access|not found|not supported|unsupported|model.*(disabled|unavailable)/i.test(
+    message,
+  );
+}
+
+function upstreamMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  try {
+    const parsed = JSON.parse(raw) as { error?: { message?: string; status?: string } };
+    return [parsed.error?.status, parsed.error?.message].filter(Boolean).join(": ") || raw;
+  } catch {
+    return raw;
+  }
+}
+
+function uniqueModels(models: Array<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const model of models) {
+    const trimmed = model?.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+export function waybillVisionModelCandidates(): string[] {
+  return uniqueModels([
+    config.geminiVisionModel,
+    ...config.geminiVisionFallbackModels,
+    config.geminiChatModel,
+  ]);
+}
+
 /** Turn a parsed JSON blob (from extraction OR a correction) into a clean WaybillExtraction. */
 function normalizeExtraction(parsed: Record<string, unknown>): WaybillExtraction {
   const items = normalizeItems(parsed.items);
@@ -167,47 +232,57 @@ export async function extractWaybillFromImage(
   mimeType: string,
 ): Promise<WaybillExtraction> {
   const mime = /^image\//.test(mimeType) ? mimeType : "image/jpeg";
+  const models = waybillVisionModelCandidates();
+  const maxAttempts = Math.max(1, Math.min(8, Math.floor(config.geminiVisionMaxAttempts)));
   let lastError: unknown;
   let text = "";
+  let usedModel = "";
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const response = await getVertexClient().models.generateContent({
-        model: config.geminiChatModel,
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { inlineData: { mimeType: mime, data: imageBase64 } },
-              { text: EXTRACTION_PROMPT },
-            ],
+  for (const model of models) {
+    usedModel = model;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await getVertexClient().models.generateContent({
+          model,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { inlineData: { mimeType: mime, data: imageBase64 } },
+                { text: EXTRACTION_PROMPT },
+              ],
+            },
+          ],
+          config: {
+            temperature: 0,
+            maxOutputTokens: 4096,
+            responseMimeType: "application/json",
           },
-        ],
-        config: {
-          temperature: 0,
-          maxOutputTokens: 4096,
-          responseMimeType: "application/json",
-        },
-      });
-      text = response.text?.trim() ?? "";
-      if (text) break;
-    } catch (error) {
-      lastError = error;
-      if (!retryable(error) || attempt === 1) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+        });
+        text = response.text?.trim() ?? "";
+        if (text) break;
+      } catch (error) {
+        lastError = error;
+        if (modelUnavailable(error)) break;
+        if (!retryable(error) || attempt === maxAttempts - 1) {
+          throw new HttpError(502, `Gemini vision failed: ${upstreamMessage(error)}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)));
+      }
     }
+    if (text) break;
   }
 
   if (!text) {
-    throw lastError ?? new Error("Vision model returned an empty response");
+    throw new HttpError(
+      502,
+      `Gemini vision failed for configured model(s) (${models.join(", ") || usedModel}): ${upstreamMessage(lastError ?? "empty response")}`,
+    );
   }
 
   let parsed: Record<string, unknown>;
-  try {
-    const cleaned = stripFences(text);
-    const obj = JSON.parse(cleaned);
-    parsed = obj && typeof obj === "object" ? (obj as Record<string, unknown>) : {};
-  } catch {
+  const obj = parseJsonObject(text);
+  if (!obj) {
     return {
       is_waybill: false,
       confidence: 0,
@@ -217,6 +292,7 @@ export async function extractWaybillFromImage(
       ],
     };
   }
+  parsed = obj;
 
   return normalizeExtraction(parsed);
 }
@@ -266,12 +342,11 @@ export async function applyWaybillCorrection(
   if (!text) return { changed: false, extraction: current };
 
   let parsed: Record<string, unknown>;
-  try {
-    const obj = JSON.parse(stripFences(text));
-    parsed = obj && typeof obj === "object" ? (obj as Record<string, unknown>) : {};
-  } catch {
+  const obj = parseJsonObject(text);
+  if (!obj) {
     return { changed: false, extraction: current };
   }
+  parsed = obj;
 
   if (parsed.changed !== true || !parsed.waybill || typeof parsed.waybill !== "object") {
     return { changed: false, extraction: current };

@@ -1,4 +1,5 @@
 const GEMINI_VERTEX_EMBEDDING_MODEL = "gemini-embedding-2";
+const DEFAULT_GEMINI_CHAT_MODEL = "gemini-3.5-flash";
 
 const LEGACY_VERTEX_EMBEDDING_MODELS: Record<string, string> = {
   // Keep the vector space stable for the existing vector(1536) corpus.
@@ -14,22 +15,33 @@ export function resolveGeminiEmbeddingModel(rawModel = process.env.GEMINI_EMBEDD
   return LEGACY_VERTEX_EMBEDDING_MODELS[modelName] ?? modelName;
 }
 
+function envCsv(name: string): string[] {
+  return (process.env[name] ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+const geminiChatModel = process.env.GEMINI_CHAT_MODEL ?? DEFAULT_GEMINI_CHAT_MODEL;
+
 export const config = {
   openaiApiKey: process.env.OPENAI_API_KEY,
 
-  // All Gemini-family model calls route through Vertex AI / Gemini Enterprise.
-  // Configure auth with GCP_PROJECT_ID, GCP_LOCATION, and either ADC or
-  // GCP_SERVICE_ACCOUNT_JSON. AI Studio GEMINI_API_KEY is intentionally unused.
+  // Gemini calls prefer GEMINI_API_KEY. GCP_PROJECT_ID / GCP_LOCATION /
+  // GCP_SERVICE_ACCOUNT_JSON are kept for the Vertex AI fallback and GCS media.
 
   // NOTE: keep model + dimensions in lockstep with the pgvector schema.
   // book_chunks.embedding is vector(1536) and the whole corpus is embedded
   // with gemini-embedding-2 @1536. Keep this model stable unless the corpus is
   // re-embedded in the same vector space.
   geminiEmbeddingModel: resolveGeminiEmbeddingModel(),
-  geminiChatModel: process.env.GEMINI_CHAT_MODEL ?? "gemini-3.5-flash",
-  geminiPlaybookModel: process.env.GEMINI_PLAYBOOK_MODEL ?? "gemini-3.5-flash",
+  geminiChatModel,
+  geminiPlaybookModel: process.env.GEMINI_PLAYBOOK_MODEL ?? DEFAULT_GEMINI_CHAT_MODEL,
+  geminiVisionModel: process.env.GEMINI_VISION_MODEL ?? geminiChatModel,
+  geminiVisionFallbackModels: envCsv("GEMINI_VISION_FALLBACK_MODELS"),
+  geminiVisionMaxAttempts: Number(process.env.GEMINI_VISION_MAX_ATTEMPTS ?? 4),
   geminiSttModel: process.env.GEMINI_STT_MODEL ?? "gemini-3.1-flash-lite-preview",
-  geminiSttFallbackModel: process.env.GEMINI_STT_FALLBACK_MODEL ?? "gemini-2.5-flash",
+  geminiSttFallbackModel: process.env.GEMINI_STT_FALLBACK_MODEL ?? DEFAULT_GEMINI_CHAT_MODEL,
   // Vertex TTS model returns PCM s16le @24kHz mono -> pcmToWav.
   geminiTtsModel: process.env.GEMINI_TTS_MODEL ?? "gemini-3.1-flash-tts-preview",
   geminiTtsVoice: process.env.GEMINI_TTS_VOICE ?? "Kore",
@@ -59,7 +71,7 @@ export const config = {
   s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? "",
   // Google Cloud / Vertex AI
   /** GCP project ID linked to the credit-backed billing account. */
-  gcpProjectId: process.env.GCP_PROJECT_ID ?? "gen-lang-client-0734367816",
+  gcpProjectId: process.env.GCP_PROJECT_ID ?? "gen-lang-client-0355771224",
   /** Vertex AI region; global endpoint supports the latest Gemini models. */
   gcpLocation: process.env.GCP_LOCATION ?? "global",
   /** Service-account JSON for non-GCP hosts such as Railway. Local development can use ADC. */
@@ -67,5 +79,5 @@ export const config = {
   /** Temporary private media bucket used for Vertex video understanding. */
   gcpMediaBucket:
     process.env.GCP_MEDIA_BUCKET ??
-    `declario-vertex-media-${process.env.GCP_PROJECT_ID ?? "gen-lang-client-0734367816"}`,
+    `declario-vertex-media-${process.env.GCP_PROJECT_ID ?? "gen-lang-client-0355771224"}`,
 };
