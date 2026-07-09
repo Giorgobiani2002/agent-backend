@@ -1,8 +1,7 @@
 /**
- * gemini.ts — Gemini API backend via @google/genai
+ * gemini.ts - Vertex AI Gemini backend via @google/genai
  *
- * Uses GoogleGenAI in apiKey mode (see vertex.ts) so every call bills as the
- * Gemini API SKU, which the $1,000 GenAI App Builder credit covers.
+ * Uses the shared Vertex AI / Gemini Enterprise client from vertex.ts.
  * Models: gemini-3.5-flash (chat) + gemini-embedding-2 @1536 (embeddings).
  */
 import {
@@ -92,7 +91,7 @@ export const geminiService: GeminiService = {
   // ── Embeddings ──
   async embed(text: string): Promise<number[]> {
     const response = await getVertexClient().models.embedContent({
-      model: config.geminiEmbeddingModel, // text-embedding-005
+      model: config.geminiEmbeddingModel,
       contents: text,
       config: {
         outputDimensionality: config.geminiEmbeddingDimensions,

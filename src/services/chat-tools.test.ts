@@ -103,3 +103,22 @@ describe("chat invoice tools", () => {
     expect(post).not.toHaveBeenCalled();
   });
 });
+
+describe("chat waybill tools", () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("requires preview order ids before confirming waybill upload", async () => {
+    const post = jest.spyOn(rsServerClient, "post").mockResolvedValue({});
+
+    const result = (await dispatchTool(
+      "upload_waybills_for_date",
+      { date: "2026-06-10", confirm: true },
+      { companyId: "co-1", userId: "user-1" },
+    )) as Record<string, unknown>;
+
+    expect(String(result.error)).toContain("confirmation_order_ids");
+    expect(post).not.toHaveBeenCalled();
+  });
+});

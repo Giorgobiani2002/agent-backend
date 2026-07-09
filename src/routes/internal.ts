@@ -9,6 +9,12 @@ import {
 import { spawnBulkWorker } from "./agent";
 import { sendError } from "../utils/http";
 import { config } from "../config";
+import { reviewMonthlyClose } from "../services/monthly-close-reviewer";
+import {
+  reviewFilingReadiness,
+  reviewReconciliation,
+  reviewTaxWorkpaper,
+} from "../services/accountant-reviewers";
 
 /**
  * Internal API surface that rs-server calls into. Today's only caller
@@ -35,6 +41,67 @@ import { config } from "../config";
  */
 
 const router = Router();
+
+router.post("/monthly-close/review", async (req: Request, res: Response) => {
+  try {
+    const payload = req.body?.payload;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new HttpError(400, "payload must be an object");
+    }
+    const result = await reviewMonthlyClose(payload as Record<string, unknown>);
+    res.json({
+      success: true,
+      review: result.output,
+      meta: {
+        confidence: result.confidence,
+        warnings: result.warnings,
+        model: result.model,
+        attempts: result.attempts,
+        latency_ms: result.latencyMs,
+      },
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+function reviewRoute(
+  fn: (payload: Record<string, unknown>) => Promise<{
+    output: unknown;
+    confidence: number;
+    warnings: string[];
+    model: string;
+    attempts: number;
+    latencyMs: number;
+  }>,
+) {
+  return async (req: Request, res: Response) => {
+    try {
+      const payload = req.body?.payload;
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        throw new HttpError(400, "payload must be an object");
+      }
+      const result = await fn(payload as Record<string, unknown>);
+      res.json({
+        success: true,
+        review: result.output,
+        meta: {
+          confidence: result.confidence,
+          warnings: result.warnings,
+          model: result.model,
+          attempts: result.attempts,
+          latency_ms: result.latencyMs,
+        },
+      });
+    } catch (error) {
+      sendError(res, error);
+    }
+  };
+}
+
+router.post("/reconciliation/review", reviewRoute(reviewReconciliation));
+router.post("/tax-workpaper/review", reviewRoute(reviewTaxWorkpaper));
+router.post("/filing-readiness/review", reviewRoute(reviewFilingReadiness));
 
 router.post("/dispatch-declaration", async (req: Request, res: Response) => {
   try {

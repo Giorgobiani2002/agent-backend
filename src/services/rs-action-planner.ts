@@ -164,7 +164,7 @@ PLAYBOOK KEY VOCABULARY (Georgia — first jurisdiction; others scaffold):
   - rs.ge.invoice              save/send B2B invoice via rs.ge
   - rs.ge.waybill              save waybill draft
   - rs.ge.waybill_activate     activate saved waybill
-  - rs.ge.vat-return           VAT return portal flow
+  - rs.ge.vat-declaration      VAT declaration portal flow
 
 RS-MCP READ-ONLY TOOLS (use ONLY these for mcp_tool_name when mcp_server="rs-ge"):
   - rsge_list_workspaces                no args; current service contexts

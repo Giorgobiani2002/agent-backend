@@ -27,12 +27,23 @@ import { checkAndBumpChatLimit } from "./chat-rate-limit";
 import {
   getChatAttachments,
   getChatAttachmentById,
+  getLatestParsedAttachment,
   markChatAttachmentStatus,
   claimImageAttachmentForSend,
+  claimAttachmentForSend,
+  updateChatAttachmentParsedData,
   type ChatAttachmentRow,
 } from "../repositories/chat-attachments";
 import { rsServerClient } from "./rs-server-client";
-import type { WaybillExtraction, WaybillItemFields } from "./waybill-vision";
+import {
+  applyWaybillCorrection,
+  type WaybillExtraction,
+  type WaybillItemFields,
+} from "./waybill-vision";
+import {
+  isSendableWaybillDraft,
+  type WaybillSpreadsheetDraft,
+} from "../utils/waybill-spreadsheet";
 import { createHash } from "crypto";
 
 interface DocumentContext {
@@ -120,7 +131,8 @@ function isGreetingOrCapabilityQuestion(text: string): boolean {
 
 function isInScopeChatTopic(text: string): boolean {
   if (isGreetingOrCapabilityQuestion(text)) return true;
-  return /(declario|rs\.?ge|revenue service|შემოსავლების|ფინანს|ბუღალტ|account|accounting|bookkeep|finance|financial|tax|vat|დღგ|profit tax|მოგების|გადასახად|declaration|დეკლარაცი|invoice|ფაქტურ|waybill|ზედნადებ|payroll|salary|ხელფას|employee|თანამშრომ|pension|პენსი|bank|ბანკ|statement|ამონაწერ|order|შეკვეთ|shopify|integration|pipeline|bulk|upload|ატვირთ|file|submit|rs-|საგადასახადო|საფინანსო|კომპანი|business|ბიზნეს|cash|revenue|expense|income|cost|asset|აქტივ|ledger|journal|balance|trial balance|excel|spreadsheet|xlsx|csv|დოკუმენტ|document|receipt|ჩეკ|audit|compliance|კომპლაიანს|ზედმეტობა|დავალიან|ვალდებულ)/i.test(
+  if (looksLikeWaybillCorrection(text)) return true;
+  return /(declario|rs\.?ge|revenue service|შემოსავლების|ფინანს|ბუღალტ|account|accounting|bookkeep|finance|financial|tax|vat|დღგ|profit tax|მოგების|გადასახად|declaration|დეკლარაცი|invoice|ფაქტურ|waybill|ზედნადებ|payroll|salary|ხელფას|employee|თანამშრომ|pension|პენსი|bank|ბანკ|statement|ამონაწერ|order|შეკვეთ|shopify|integration|pipeline|bulk|upload|ატვირთ|file|submit|rs-|საგადასახადო|საფინანსო|კომპანი|business|ბიზნეს|cash|revenue|expense|income|cost|ფას|რაოდენ|მისამართ|მყიდველ|asset|აქტივ|ledger|journal|balance|trial balance|excel|spreadsheet|xlsx|csv|დოკუმენტ|document|receipt|ჩეკ|audit|compliance|კომპლაიანს|ზედმეტობა|დავალიან|ვალდებულ)/i.test(
     text,
   );
 }
@@ -616,6 +628,26 @@ interface WaybillPendingAction {
   warnings: string[];
 }
 
+interface WaybillSpreadsheetPendingAction {
+  type: "waybill_spreadsheet_send";
+  status: "pending";
+  attachmentId: string;
+  approvalId: string;
+  snapshotHash: string;
+  waybillCount: number;
+  itemCount: number;
+  totalAmount: number;
+  preview: Array<{
+    reference: string;
+    buyerName: string;
+    buyerTin: string;
+    itemCount: number;
+    totalAmount: number;
+    warnings: string[];
+  }>;
+  warnings: string[];
+}
+
 /** Coerce a stored attachment `parsed_data` blob back into a WaybillExtraction. */
 function asWaybillExtraction(value: unknown): WaybillExtraction {
   const o = asJsonObject(value);
@@ -765,6 +797,221 @@ function buildWaybillWorkflowResult(imageAttachments: ChatAttachmentRow[]): {
   };
 
   return { text: waybillPreviewText(action, extraction), pendingAction: action };
+}
+
+function asWaybillSpreadsheetDrafts(value: unknown): {
+  drafts: WaybillSpreadsheetDraft[];
+  warnings: string[];
+} {
+  const parsed = asJsonObject(value);
+  const warnings = Array.isArray(parsed.warnings)
+    ? parsed.warnings.map(String).filter(Boolean)
+    : [];
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  const drafts: WaybillSpreadsheetDraft[] = Array.isArray(parsed.drafts)
+    ? parsed.drafts
+        .map((raw, idx): WaybillSpreadsheetDraft | null => {
+          const d = asJsonObject(raw);
+          const items: WaybillSpreadsheetDraft["items"] = Array.isArray(d.items)
+            ? d.items
+                .map((rawItem): WaybillSpreadsheetDraft["items"][number] | null => {
+                  const item = asJsonObject(rawItem);
+                  const name = str(item.w_name);
+                  if (!name) return null;
+                  return {
+                    w_name: name,
+                    unit_txt: str(item.unit_txt),
+                    quantity: Number(item.quantity) || 0,
+                    price: Number(item.price) || 0,
+                    source_row: Number(item.source_row) || 0,
+                  };
+                })
+                .filter((item): item is WaybillSpreadsheetDraft["items"][number] => item !== null)
+            : [];
+          const total = items.reduce((sum, item) => sum + item.quantity * item.price, 0);
+          return {
+            reference: str(d.reference) ?? `draft-${idx + 1}`,
+            buyer_name: str(d.buyer_name),
+            buyer_tin: str(d.buyer_tin),
+            start_address: str(d.start_address),
+            end_address: str(d.end_address),
+            driver_name: str(d.driver_name),
+            driver_tin: str(d.driver_tin),
+            car_number: str(d.car_number),
+            document_number: str(d.document_number),
+            begin_date: str(d.begin_date),
+            items,
+            source_rows: Array.isArray(d.source_rows)
+              ? d.source_rows.map(Number).filter((n) => Number.isFinite(n))
+              : [],
+            total_amount: Number(d.total_amount) || Math.round(total * 100) / 100,
+            warnings: Array.isArray(d.warnings)
+              ? d.warnings.map(String).filter(Boolean)
+              : [],
+          };
+        })
+        .filter((draft): draft is WaybillSpreadsheetDraft => draft !== null)
+    : [];
+  return { drafts, warnings };
+}
+
+function waybillExtractionFromSpreadsheetDraft(
+  draft: WaybillSpreadsheetDraft,
+): WaybillExtraction {
+  return {
+    is_waybill: draft.items.length > 0,
+    confidence: 1,
+    buyer_name: draft.buyer_name,
+    buyer_tin: draft.buyer_tin,
+    start_address: draft.start_address,
+    end_address: draft.end_address,
+    driver_name: draft.driver_name,
+    driver_tin: draft.driver_tin,
+    car_number: draft.car_number,
+    document_number: draft.document_number,
+    begin_date: draft.begin_date,
+    items: draft.items.map((item) => ({
+      w_name: item.w_name,
+      unit_txt: item.unit_txt,
+      quantity: item.quantity,
+      price: item.price,
+    })),
+    warnings: draft.warnings,
+  };
+}
+
+function stableReferencePart(value: string): string {
+  const normalized = value
+    .trim()
+    .replace(/[^a-zA-Z0-9_.:-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80);
+  return normalized || createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+function waybillSpreadsheetSnapshotHash(drafts: WaybillSpreadsheetDraft[]): string {
+  const canonical = JSON.stringify(
+    drafts.map((draft) => ({
+      reference: draft.reference,
+      buyer_tin: draft.buyer_tin ?? "",
+      buyer_name: draft.buyer_name ?? "",
+      start_address: draft.start_address ?? "",
+      end_address: draft.end_address ?? "",
+      items: draft.items.map((i) => [i.w_name, i.quantity, i.price, i.unit_txt ?? ""]),
+    })),
+  );
+  return createHash("sha256").update(canonical).digest("hex");
+}
+
+function waybillSpreadsheetPreviewText(
+  action: WaybillSpreadsheetPendingAction,
+): string {
+  const money = (value: number) =>
+    new Intl.NumberFormat("ka-GE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+  const rows = action.preview.map(
+    (draft) =>
+      `- ${draft.reference}: ${draft.buyerName || "მყიდველი"} (ს/კ ${draft.buyerTin}) · ${draft.itemCount} პოზიცია · ${money(draft.totalAmount)} GEL`,
+  );
+  const more = action.waybillCount - action.preview.length;
+  return [
+    "Excel ფაილიდან ზედნადებები წავიკითხე. გადაამოწმეთ სია და მხოლოდ შემდეგ დაადასტურეთ RS.ge-ზე გაგზავნა.",
+    "თუ ეს Shopify/ICS შეკვეთებია, უფრო უსაფრთხო გზაა ჩატში თარიღით მოთხოვნა: \"ატვირთე ზედნადებები დღევანდელი შეკვეთებისთვის\" — მაშინ სისტემა ICS case/tracking-ს Shopify order-თან შეადარებს და მხოლოდ დადასტურებულ order-ებს ატვირთავს.",
+    "Excel გამოიყენეთ მაშინ, როცა ეს მონაცემები Shopify order-ებში არ არის ან ხელით მიღებული ზედნადებებია. ასეთ ფაილში აუცილებლად დატოვეთ order/case/document reference, buyer TIN, buyer name, start/end address, item, quantity და price.",
+    "",
+    `ზედნადებები: ${action.waybillCount}`,
+    `საქონლის პოზიციები: ${action.itemCount}`,
+    `ჯამი: ${money(action.totalAmount)} GEL`,
+    "",
+    ...rows,
+    ...(more > 0 ? [`… და კიდევ ${more} ზედნადები`] : []),
+    ...(action.warnings.length ? ["", "გასათვალისწინებელი:", ...action.warnings.map((w) => `- ${w}`)] : []),
+    "",
+    "ქვემოთ მოცემული ღილაკით ყველა ეს ზედნადები გაიგზავნება rs.ge-ზე.",
+  ].join("\n");
+}
+
+function buildWaybillSpreadsheetWorkflowResult(attachments: ChatAttachmentRow[]): {
+  text: string;
+  pendingAction?: WaybillSpreadsheetPendingAction;
+} {
+  const chosen =
+    attachments.find((a) => a.status !== "rejected") ?? attachments[attachments.length - 1];
+  if (chosen.status === "sent") {
+    return { text: "ამ Excel ფაილის ზედნადებები უკვე გაგზავნილია rs.ge-ზე." };
+  }
+  const { drafts, warnings } = asWaybillSpreadsheetDrafts(chosen.parsed_data);
+  if (!drafts.length) {
+    return {
+      text: [
+        "Excel ფაილში გასაგზავნი ზედნადების სტრიქონები ვერ ვიპოვე.",
+        "საჭიროა მინიმუმ ეს სვეტები: buyer TIN / მყიდველის ს/კ, item / საქონელი, quantity / რაოდენობა, price / ფასი.",
+        "თუ ეს Shopify/ICS შეკვეთებია, Excel-ის ნაცვლად ჩატში თარიღით სთხოვეთ: \"ატვირთე ზედნადებები დღევანდელი შეკვეთებისთვის\" — სისტემა თვითონ შეამოწმებს ICS case/tracking-ს Shopify order-ებთან.",
+        ...(warnings.length ? ["", ...warnings.map((w) => `- ${w}`)] : []),
+      ].join("\n"),
+    };
+  }
+
+  const invalidDrafts = drafts.filter((draft) => !isSendableWaybillDraft(draft));
+  if (invalidDrafts.length > 0) {
+    const details = invalidDrafts.slice(0, 8).map((draft) => {
+      const draftWarnings = draft.warnings.length
+        ? draft.warnings.join("; ")
+        : "missing required buyer/address/item fields";
+      return `- ${draft.reference}: ${draftWarnings}`;
+    });
+    return {
+      text: [
+        "Excel ფაილი წავიკითხე, მაგრამ RS.ge-ზე გასაგზავნად რამდენიმე ზედნადებს სავალდებულო მონაცემები აკლია.",
+        "",
+        ...details,
+        ...(invalidDrafts.length > details.length
+          ? [`… და კიდევ ${invalidDrafts.length - details.length} ზედნადები`]
+          : []),
+        "",
+        "გაასწორეთ Excel-ში მყიდველის ს/კ, მყიდველის დასახელება, გასვლის/დანიშნულების მისამართები და საქონლის რაოდენობა/ფასი, შემდეგ ხელახლა ატვირთეთ.",
+        "თუ ეს მონაცემები Shopify/ICS-დან მოდის, ჯობია გამოიყენოთ order-based ატვირთვა თარიღით, რომ სისტემა Shopify order-სა და ICS shipment-ს ერთმანეთთან შეადარებს.",
+      ].join("\n"),
+    };
+  }
+
+  const itemCount = drafts.reduce((sum, draft) => sum + draft.items.length, 0);
+  const totalAmount = drafts.reduce((sum, draft) => sum + draft.total_amount, 0);
+  const draftWarnings = drafts.flatMap((draft) =>
+    draft.warnings.map((warning) => `${draft.reference}: ${warning}`),
+  );
+  const action: WaybillSpreadsheetPendingAction = {
+    type: "waybill_spreadsheet_send",
+    status: "pending",
+    attachmentId: chosen.id,
+    approvalId: chosen.id,
+    snapshotHash: waybillSpreadsheetSnapshotHash(drafts),
+    waybillCount: drafts.length,
+    itemCount,
+    totalAmount: Math.round(totalAmount * 100) / 100,
+    preview: drafts.slice(0, 10).map((draft) => ({
+      reference: draft.reference,
+      buyerName: draft.buyer_name ?? "",
+      buyerTin: draft.buyer_tin ?? "",
+      itemCount: draft.items.length,
+      totalAmount: draft.total_amount,
+      warnings: draft.warnings,
+    })),
+    warnings: [...warnings, ...draftWarnings],
+  };
+
+  return {
+    text: waybillSpreadsheetPreviewText(action),
+    pendingAction: action,
+  };
+}
+
+function looksLikeWaybillCorrection(text: string): boolean {
+  return (
+    /(შეცვალ|შეასწორ|არასწორ|ნაცვლად|უნდა იყოს|instead|correct)/i.test(text) ||
+    /(ფასი|რაოდენ|ს\/კ|მყიდველ|მისამართ|price|quantity|qty|buyer|tin|address)/i.test(text) ||
+    (/არა/i.test(text) && /\d/.test(text))
+  );
 }
 
 async function runToolLoop(
@@ -957,13 +1204,46 @@ export async function sendConversationMessage(
   const payrollAttachments = attachments.filter(
     (attachment) => attachment.kind === "payroll_spreadsheet",
   );
-  const imageAttachments = attachments.filter(
+  let imageAttachments = attachments.filter(
     (attachment) => attachment.kind === "image",
   );
+  const waybillSpreadsheetAttachments = attachments.filter(
+    (attachment) => attachment.kind === "waybill_spreadsheet",
+  );
+  if (attachments.length === 0 && looksLikeWaybillCorrection(content)) {
+    const latestImage = await getLatestParsedAttachment({
+      companyId: input.companyId,
+      conversationId: input.conversationId,
+      kind: "image",
+      userId: input.userId,
+    });
+    if (latestImage) {
+      try {
+        const correction = await applyWaybillCorrection(
+          asWaybillExtraction(latestImage.parsed_data),
+          content,
+        );
+        if (correction.changed) {
+          const parsedData = correction.extraction as unknown as Record<string, unknown>;
+          const updated = await updateChatAttachmentParsedData({
+            companyId: input.companyId,
+            attachmentId: latestImage.id,
+            parsedData,
+            status: "parsed",
+          });
+          imageAttachments = [updated ?? { ...latestImage, parsed_data: parsedData }];
+        }
+      } catch (error) {
+        console.warn("[chat] waybill correction failed:", error);
+      }
+    }
+  }
   // Attachment-driven workflows (payroll sheet, waybill photo) answer from the
   // uploaded data, not the book corpus — skip the slow RAG embed.
   const diagnosticMode =
-    payrollAttachments.length || imageAttachments.length
+    payrollAttachments.length ||
+    imageAttachments.length ||
+    waybillSpreadsheetAttachments.length
       ? true
       : looksLikeDiagnosticQuery(content);
 
@@ -975,19 +1255,25 @@ export async function sendConversationMessage(
     try {
       queryEmbedding = await gemini.embed(formatQueryForEmbedding(content));
     } catch (error) {
-      console.error("[chat] Gemini embed failed:", error);
-      throw new HttpError(
-        502,
-        `Gemini embed failed: ${getUpstreamErrorMessage(error)}`,
+      console.warn(
+        "[chat] Gemini embed failed; continuing without RAG context:",
+        getUpstreamErrorMessage(error),
       );
+      queryEmbedding = [];
     }
-    context = await gatherComprehensiveContext(queryEmbedding);
+    if (queryEmbedding.length > 0) {
+      context = await gatherComprehensiveContext(queryEmbedding);
+    }
   }
 
   let assistant: { text: string; model: string };
   let toolTrace: ChatToolTraceEntry[] = [];
   let toolIterations = 0;
-  let pendingActionForMessage: PayrollPendingAction | WaybillPendingAction | undefined;
+  let pendingActionForMessage:
+    | PayrollPendingAction
+    | WaybillPendingAction
+    | WaybillSpreadsheetPendingAction
+    | undefined;
   try {
     if (imageAttachments.length) {
       const waybillResult = buildWaybillWorkflowResult(imageAttachments);
@@ -996,6 +1282,16 @@ export async function sendConversationMessage(
         model: "declario-waybill-vision-v1",
       };
       pendingActionForMessage = waybillResult.pendingAction;
+      toolIterations = 1;
+    } else if (waybillSpreadsheetAttachments.length) {
+      const waybillSpreadsheetResult = buildWaybillSpreadsheetWorkflowResult(
+        waybillSpreadsheetAttachments,
+      );
+      assistant = {
+        text: waybillSpreadsheetResult.text,
+        model: "declario-waybill-spreadsheet-v1",
+      };
+      pendingActionForMessage = waybillSpreadsheetResult.pendingAction;
       toolIterations = 1;
     } else if (payrollAttachments.length) {
       const employees = payrollAttachments.flatMap((attachment) => {
@@ -1090,7 +1386,11 @@ export async function sendConversationMessage(
     assistantModel: assistant.model,
     assistantMetadata: {
       pendingAction: pendingActionForMessage,
-      attachments: [...payrollAttachments, ...imageAttachments].map((attachment) => ({
+      attachments: [
+        ...payrollAttachments,
+        ...imageAttachments,
+        ...waybillSpreadsheetAttachments,
+      ].map((attachment) => ({
         id: attachment.id,
         name: attachment.original_name,
         kind: attachment.kind,
@@ -1294,6 +1594,138 @@ export async function confirmWaybillAction(input: {
   return result;
 }
 
+export async function confirmWaybillSpreadsheetAction(input: {
+  companyId: string;
+  conversationId: string;
+  userId?: string;
+  attachmentId: string;
+  snapshotHash?: string;
+}) {
+  const conversation = await getConversation(input.companyId, input.conversationId);
+  if (!conversation) throw new HttpError(404, "Conversation not found");
+  if (conversation.user_id && input.userId && conversation.user_id !== input.userId) {
+    throw new HttpError(403, "Conversation belongs to another user");
+  }
+
+  const attachment = await getChatAttachmentById({
+    companyId: input.companyId,
+    conversationId: input.conversationId,
+    attachmentId: input.attachmentId,
+    userId: input.userId,
+  });
+  if (!attachment || attachment.kind !== "waybill_spreadsheet") {
+    throw new HttpError(404, "Waybill spreadsheet attachment not found");
+  }
+
+  if (attachment.status === "sent") {
+    const prior = asJsonObject(attachment.parsed_data).sent_result;
+    return { alreadySent: true, result: prior ?? null };
+  }
+
+  const { drafts } = asWaybillSpreadsheetDrafts(attachment.parsed_data);
+  if (!drafts.length) {
+    throw new HttpError(400, "This spreadsheet has no valid waybill drafts");
+  }
+  const invalidDrafts = drafts.filter((draft) => !isSendableWaybillDraft(draft));
+  if (invalidDrafts.length > 0) {
+    throw new HttpError(
+      400,
+      `Spreadsheet has ${invalidDrafts.length} waybill draft(s) with missing required fields`,
+    );
+  }
+  if (input.snapshotHash && waybillSpreadsheetSnapshotHash(drafts) !== input.snapshotHash) {
+    throw new HttpError(
+      409,
+      "The spreadsheet waybill data changed since you reviewed it — re-check and try again",
+    );
+  }
+
+  const claimed = await claimAttachmentForSend({
+    companyId: input.companyId,
+    attachmentId: attachment.id,
+    kind: "waybill_spreadsheet",
+  });
+  if (!claimed) {
+    const fresh = await getChatAttachmentById({
+      companyId: input.companyId,
+      conversationId: input.conversationId,
+      attachmentId: input.attachmentId,
+      userId: input.userId,
+    });
+    return {
+      alreadySent: true,
+      result: asJsonObject(fresh?.parsed_data).sent_result ?? null,
+    };
+  }
+
+  const results: Array<Record<string, unknown>> = [];
+  const failures: Array<{ reference: string; error: string }> = [];
+  for (const draft of drafts) {
+    const extraction = waybillExtractionFromSpreadsheetDraft(draft);
+    const reference = `spreadsheet:${attachment.id}:${stableReferencePart(draft.reference)}`;
+    const payload = {
+      reference,
+      send: true,
+      buyer_tin: extraction.buyer_tin,
+      buyer_name: extraction.buyer_name ?? "",
+      start_address: extraction.start_address,
+      end_address: extraction.end_address,
+      driver_tin: extraction.driver_tin,
+      driver_name: extraction.driver_name,
+      car_number: extraction.car_number,
+      begin_date: extraction.begin_date,
+      comment: draft.document_number
+        ? `Imported from spreadsheet document ${draft.document_number}`
+        : "Imported from spreadsheet",
+      items: extraction.items.map((i) => ({
+        w_name: i.w_name,
+        unit_txt: i.unit_txt,
+        quantity: i.quantity,
+        price: i.price,
+      })),
+    };
+
+    try {
+      const result = await rsServerClient.post<Record<string, unknown>>(
+        "/internal/tools/waybills/save-and-send",
+        { companyId: input.companyId, userId: input.userId, body: payload },
+      );
+      results.push({ reference: draft.reference, ...result });
+    } catch (error) {
+      failures.push({ reference: draft.reference, error: getUpstreamErrorMessage(error) });
+    }
+  }
+
+  const summary = {
+    sent: results.length,
+    failed: failures.length,
+    results,
+    failures,
+  };
+
+  if (failures.length > 0) {
+    await markChatAttachmentStatus({
+      companyId: input.companyId,
+      attachmentId: attachment.id,
+      status: "parsed",
+      mergeParsedData: { last_send_result: summary },
+    }).catch(() => undefined);
+    throw new HttpError(
+      502,
+      `Spreadsheet waybill upload partially failed: ${results.length} sent, ${failures.length} failed`,
+    );
+  }
+
+  await markChatAttachmentStatus({
+    companyId: input.companyId,
+    attachmentId: attachment.id,
+    status: "sent",
+    mergeParsedData: { sent_result: summary },
+  });
+
+  return summary;
+}
+
 export const chatService = {
   createConversation,
   deleteConversation,
@@ -1302,4 +1734,5 @@ export const chatService = {
   sendConversationMessage,
   confirmPayrollAction,
   confirmWaybillAction,
+  confirmWaybillSpreadsheetAction,
 };

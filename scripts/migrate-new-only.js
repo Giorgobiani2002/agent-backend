@@ -17,6 +17,7 @@ const FILES = ONLY.length > 0 ? ONLY : [
   "016_agent_runs.sql",
   "017_playbook_key.sql",
   "018_alerts.sql",
+  "023_chat_attachments_waybill_spreadsheet.sql",
 ];
 
 (async () => {

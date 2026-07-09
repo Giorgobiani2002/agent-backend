@@ -4,6 +4,7 @@ import crypto from "crypto";
 import { config } from "../config";
 import { downloadVideo, extractVideoId } from "../utils/youtube";
 import { extractScreenshots } from "../utils/screenshots";
+import { uploadVertexMedia } from "../utils/gcs";
 import { getVertexClient } from "./vertex";
 import {
   createPendingPlaybook,
@@ -246,24 +247,9 @@ async function analyzeVideoFile(
 ): Promise<{ steps: PlaybookStep[]; model: string; warnings: string[] }> {
   const ai = getVertexClient();
 
-  // Gemini API (apiKey) mode can't read gs:// URIs — upload via the Files API
-  // and wait for the file to finish processing before referencing it.
-  let uploaded = await ai.files.upload({
-    file: filePath,
-    config: { mimeType, displayName },
-  });
-
-  const startedAt = Date.now();
-  while (String(uploaded.state) === "PROCESSING") {
-    if (Date.now() - startedAt > 5 * 60_000) {
-      throw new Error("Gemini file processing timed out");
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
-    uploaded = await ai.files.get({ name: uploaded.name as string });
-  }
-  if (String(uploaded.state) === "FAILED" || !uploaded.uri) {
-    throw new Error("Gemini file processing failed");
-  }
+  // Upload the video to the configured Vertex media bucket.
+  // Vertex reads large media from GCS, then the cleanup removes the temporary object.
+  const uploaded = await uploadVertexMedia({ filePath, mimeType, displayName });
 
   try {
     const response = await ai.models.generateContent({
@@ -272,7 +258,7 @@ async function analyzeVideoFile(
         {
           role: "user",
           parts: [
-            { fileData: { fileUri: uploaded.uri, mimeType: uploaded.mimeType ?? mimeType } },
+            { fileData: { fileUri: uploaded.uri, mimeType } },
             { text: PLAYBOOK_PROMPT },
           ],
         },
@@ -301,9 +287,7 @@ async function analyzeVideoFile(
     const { steps, warnings } = normalizeExtractedSteps(parsed.steps);
     return { steps, model, warnings };
   } finally {
-    if (uploaded.name) {
-      await ai.files.delete({ name: uploaded.name }).catch(() => {});
-    }
+    await uploaded.cleanup().catch(() => {});
   }
 }
 

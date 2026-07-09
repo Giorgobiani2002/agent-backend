@@ -2,7 +2,9 @@ import { sendConversationMessage } from "./chat";
 import { GeminiService } from "./gemini";
 import * as chatRepository from "../repositories/chat";
 import * as booksRepository from "../repositories/books";
+import * as attachmentRepository from "../repositories/chat-attachments";
 import * as rateLimit from "./chat-rate-limit";
+import * as waybillVision from "./waybill-vision";
 import { TEST_COMPANY_ID } from "../test-utils";
 
 jest.mock("../repositories/chat");
@@ -329,5 +331,80 @@ describe("chat service", () => {
         assistantModel: "gemini-3.1-flash-lite-preview",
       }),
     );
+  });
+
+  it("updates the latest parsed waybill image when the user sends a correction", async () => {
+    const currentAttachment: attachmentRepository.ChatAttachmentRow = {
+      id: "11111111-1111-1111-1111-111111111111",
+      company_id: TEST_COMPANY_ID,
+      conversation_id: "conversation-1",
+      user_id: "user-1",
+      original_name: "waybill.jpg",
+      mime_type: "image/jpeg",
+      kind: "image",
+      size_bytes: 100,
+      status: "parsed",
+      created_at: "now",
+      parsed_data: {
+        is_waybill: true,
+        confidence: 0.9,
+        buyer_name: "Buyer LLC",
+        buyer_tin: "123456789",
+        start_address: "Tbilisi",
+        end_address: "Batumi",
+        items: [{ w_name: "Coffee", quantity: 1, price: 12 }],
+        warnings: [],
+      },
+    };
+    const corrected = {
+      is_waybill: true,
+      confidence: 0.95,
+      buyer_name: "Buyer LLC",
+      buyer_tin: "123456789",
+      start_address: "Tbilisi",
+      end_address: "Batumi",
+      items: [{ w_name: "Coffee", quantity: 1, price: 21 }],
+      warnings: [],
+    };
+    jest.spyOn(attachmentRepository, "getLatestParsedAttachment").mockResolvedValue(currentAttachment);
+    jest
+      .spyOn(waybillVision, "applyWaybillCorrection")
+      .mockResolvedValue({ changed: true, extraction: corrected });
+    jest.spyOn(attachmentRepository, "updateChatAttachmentParsedData").mockResolvedValue({
+      ...currentAttachment,
+      parsed_data: corrected as unknown as Record<string, unknown>,
+    });
+
+    await sendConversationMessage(
+      {
+        companyId: TEST_COMPANY_ID,
+        conversationId: "conversation-1",
+        content: "ფასი 12 კი არა 21",
+        metadata: {},
+        userId: "user-1",
+      },
+      gemini,
+    );
+
+    expect(attachmentRepository.updateChatAttachmentParsedData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachmentId: currentAttachment.id,
+        parsedData: corrected,
+        status: "parsed",
+      }),
+    );
+    expect(chatRepository.persistChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantModel: "declario-waybill-vision-v1",
+        assistantMetadata: expect.objectContaining({
+          pendingAction: expect.objectContaining({
+            type: "waybill_send",
+            attachmentId: currentAttachment.id,
+            totalAmount: 21,
+          }),
+        }),
+      }),
+    );
+    expect(gemini.embed).not.toHaveBeenCalled();
   });
 });

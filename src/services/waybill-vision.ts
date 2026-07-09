@@ -121,6 +121,32 @@ function retryable(error: unknown): boolean {
   );
 }
 
+/** Turn a parsed JSON blob (from extraction OR a correction) into a clean WaybillExtraction. */
+function normalizeExtraction(parsed: Record<string, unknown>): WaybillExtraction {
+  const items = normalizeItems(parsed.items);
+  const warnings = Array.isArray(parsed.warnings)
+    ? parsed.warnings.map((w) => String(w)).filter(Boolean)
+    : [];
+  const confidence = Math.max(0, Math.min(1, toNumber(parsed.confidence)));
+  return {
+    is_waybill: parsed.is_waybill !== false && items.length > 0,
+    confidence,
+    seller_name: toStringOrUndefined(parsed.seller_name),
+    seller_tin: toStringOrUndefined(parsed.seller_tin),
+    buyer_name: toStringOrUndefined(parsed.buyer_name),
+    buyer_tin: toStringOrUndefined(parsed.buyer_tin),
+    start_address: toStringOrUndefined(parsed.start_address),
+    end_address: toStringOrUndefined(parsed.end_address),
+    driver_name: toStringOrUndefined(parsed.driver_name),
+    driver_tin: toStringOrUndefined(parsed.driver_tin),
+    car_number: toStringOrUndefined(parsed.car_number),
+    document_number: toStringOrUndefined(parsed.document_number),
+    begin_date: toStringOrUndefined(parsed.begin_date),
+    items,
+    warnings,
+  };
+}
+
 /**
  * Run the vision extraction. Returns a normalized WaybillExtraction even when
  * the model returns partial data; throws only when the model call itself fails
@@ -182,29 +208,66 @@ export async function extractWaybillFromImage(
     };
   }
 
-  const items = normalizeItems(parsed.items);
-  const warnings = Array.isArray(parsed.warnings)
-    ? parsed.warnings.map((w) => String(w)).filter(Boolean)
-    : [];
+  return normalizeExtraction(parsed);
+}
 
-  const confidenceRaw = toNumber(parsed.confidence);
-  const confidence = Math.max(0, Math.min(1, confidenceRaw));
+/**
+ * Apply a free-text user correction to an already-extracted waybill that is
+ * awaiting confirmation. Returns `changed:false` (and the data unchanged) when
+ * the message isn't actually about editing the waybill, so the caller can fall
+ * back to normal chat. Text-only model call (no image).
+ */
+export async function applyWaybillCorrection(
+  current: WaybillExtraction,
+  instruction: string,
+): Promise<{ changed: boolean; extraction: WaybillExtraction }> {
+  const prompt = [
+    "You maintain the extracted data of a Georgian waybill (ზеднадеби) that is awaiting the user's confirmation before being sent to rs.ge.",
+    "Below is the CURRENT data as JSON, then a message from the user.",
+    "If the user's message corrects or changes one or more fields (buyer name/TIN, addresses, driver name/TIN, car number, or any line item's name/unit/quantity/price, including adding or removing items), apply ALL the changes and return the FULL updated object with changed=true.",
+    "If the user's message is NOT about changing this waybill (a question, chit-chat, or unrelated request), return the data UNCHANGED with changed=false.",
+    "",
+    "Return JSON ONLY in this shape (no markdown):",
+    '{ "changed": boolean, "waybill": { "is_waybill": boolean, "confidence": number, "seller_name": string|null, "seller_tin": string|null, "buyer_name": string|null, "buyer_tin": string|null, "start_address": string|null, "end_address": string|null, "driver_name": string|null, "driver_tin": string|null, "car_number": string|null, "document_number": string|null, "begin_date": string|null, "items": [{"w_name": string, "unit_txt": string|null, "quantity": number, "price": number}], "warnings": string[] } }',
+    "Rules: quantity and price are plain numbers; price is per-unit. Keep Georgian text as-is. Preserve every field the user did NOT mention.",
+    "",
+    "CURRENT DATA:",
+    JSON.stringify(current),
+    "",
+    "USER MESSAGE:",
+    instruction,
+  ].join("\n");
 
+  let text = "";
+  try {
+    const response = await getVertexClient().models.generateContent({
+      model: config.geminiChatModel,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: {
+        temperature: 0,
+        maxOutputTokens: 4096,
+        responseMimeType: "application/json",
+      },
+    });
+    text = response.text?.trim() ?? "";
+  } catch {
+    return { changed: false, extraction: current };
+  }
+  if (!text) return { changed: false, extraction: current };
+
+  let parsed: Record<string, unknown>;
+  try {
+    const obj = JSON.parse(stripFences(text));
+    parsed = obj && typeof obj === "object" ? (obj as Record<string, unknown>) : {};
+  } catch {
+    return { changed: false, extraction: current };
+  }
+
+  if (parsed.changed !== true || !parsed.waybill || typeof parsed.waybill !== "object") {
+    return { changed: false, extraction: current };
+  }
   return {
-    is_waybill: parsed.is_waybill !== false && items.length > 0,
-    confidence,
-    seller_name: toStringOrUndefined(parsed.seller_name),
-    seller_tin: toStringOrUndefined(parsed.seller_tin),
-    buyer_name: toStringOrUndefined(parsed.buyer_name),
-    buyer_tin: toStringOrUndefined(parsed.buyer_tin),
-    start_address: toStringOrUndefined(parsed.start_address),
-    end_address: toStringOrUndefined(parsed.end_address),
-    driver_name: toStringOrUndefined(parsed.driver_name),
-    driver_tin: toStringOrUndefined(parsed.driver_tin),
-    car_number: toStringOrUndefined(parsed.car_number),
-    document_number: toStringOrUndefined(parsed.document_number),
-    begin_date: toStringOrUndefined(parsed.begin_date),
-    items,
-    warnings,
+    changed: true,
+    extraction: normalizeExtraction(parsed.waybill as Record<string, unknown>),
   };
 }
