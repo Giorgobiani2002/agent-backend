@@ -132,7 +132,7 @@ function isGreetingOrCapabilityQuestion(text: string): boolean {
 function isInScopeChatTopic(text: string): boolean {
   if (isGreetingOrCapabilityQuestion(text)) return true;
   if (looksLikeWaybillCorrection(text)) return true;
-  return /(declario|rs\.?ge|revenue service|შემოსავლების|ფინანს|ბუღალტ|account|accounting|bookkeep|finance|financial|tax|vat|დღგ|profit tax|მოგების|გადასახად|declaration|დეკლარაცი|invoice|ფაქტურ|waybill|ზედნადებ|payroll|salary|ხელფას|employee|თანამშრომ|pension|პენსი|bank|ბანკ|statement|ამონაწერ|order|შეკვეთ|shopify|integration|pipeline|bulk|upload|ატვირთ|file|submit|rs-|საგადასახადო|საფინანსო|კომპანი|business|ბიზნეს|cash|revenue|expense|income|cost|ფას|რაოდენ|მისამართ|მყიდველ|asset|აქტივ|ledger|journal|balance|trial balance|excel|spreadsheet|xlsx|csv|დოკუმენტ|document|receipt|ჩეკ|audit|compliance|კომპლაიანს|ზედმეტობა|დავალიან|ვალდებულ)/i.test(
+  return /(declario|rs\.?ge|revenue service|შემოსავლების|ფინანს|ბუღალტ|account|accounting|bookkeep|finance|financial|tax|vat|დღგ|profit tax|მოგების|გადასახად|declaration|დეკლარაცი|invoice|ფაქტურ|waybill|ზედნადებ|payroll|salary|ხელფას|employee|თანამშრომ|pension|პენსი|bank|ბანკ|statement|ამონაწერ|order|შეკვეთ|shopify|integration|ინტეგრაცი|დაკავშირ|კავშირ|pipeline|bulk|upload|ატვირთ|file|submit|rs-|(^|\s)რს(\s|$)|საგადასახადო|საფინანსო|კომპანი|business|ბიზნეს|cash|revenue|expense|income|cost|ფას|რაოდენ|მისამართ|მყიდველ|asset|აქტივ|ledger|journal|balance|trial balance|excel|spreadsheet|xlsx|csv|დოკუმენტ|document|receipt|ჩეკ|audit|compliance|კომპლაიანს|ზედმეტობა|დავალიან|ვალდებულ)/i.test(
     text,
   );
 }

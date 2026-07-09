@@ -333,6 +333,29 @@ describe("chat service", () => {
     );
   });
 
+  it("allows Georgian shorthand questions about RS.ge connection status", async () => {
+    await sendConversationMessage(
+      {
+        companyId: TEST_COMPANY_ID,
+        conversationId: "conversation-1",
+        content: "ჯერ დაკავშირებული რო არ მაქვს რს?",
+        metadata: {},
+      },
+      gemini,
+    );
+
+    expect(gemini.generateWithTools).toHaveBeenCalled();
+    expect(gemini.embed).not.toHaveBeenCalled();
+    expect(chatRepository.persistChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantModel: "gemini-3.1-flash-lite-preview",
+        assistantMetadata: expect.not.objectContaining({
+          domainGuard: expect.objectContaining({ blocked: true }),
+        }),
+      }),
+    );
+  });
+
   it("explains the waybill photo upload flow without denying OCR support", async () => {
     await sendConversationMessage(
       {
