@@ -1237,13 +1237,15 @@ export async function sendConversationMessage(
     try {
       queryEmbedding = await gemini.embed(formatQueryForEmbedding(content));
     } catch (error) {
-      console.error("[chat] Gemini embed failed:", error);
-      throw new HttpError(
-        502,
-        `Gemini embed failed: ${getUpstreamErrorMessage(error)}`,
+      console.warn(
+        "[chat] Gemini embed failed; continuing without RAG context:",
+        getUpstreamErrorMessage(error),
       );
+      queryEmbedding = [];
     }
-    context = await gatherComprehensiveContext(queryEmbedding);
+    if (queryEmbedding.length > 0) {
+      context = await gatherComprehensiveContext(queryEmbedding);
+    }
   }
 
   let assistant: { text: string; model: string };
