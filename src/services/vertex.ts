@@ -40,14 +40,19 @@ export function getVertexCredentials(): ServiceAccountCredentials | undefined {
 }
 
 /**
- * Returns the shared GoogleGenAI client in Vertex AI / Gemini Enterprise mode.
+ * Returns the shared GoogleGenAI client.
  *
- * All Declario AI model calls should route through this client so embeddings,
- * chat, vision, STT, TTS, and playbook extraction bill to the configured
- * Google Cloud project instead of the AI Studio Gemini API-key SKU.
+ * Prefer GEMINI_API_KEY when present so Railway can bill Gemini calls to the
+ * AI Studio key's project. Fall back to Vertex AI for environments that rely on
+ * GCP project credentials instead.
  */
 export function getVertexClient(): GoogleGenAI {
   if (!client) {
+    if (process.env.GEMINI_API_KEY?.trim()) {
+      client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY.trim() });
+      return client;
+    }
+
     if (!config.gcpProjectId || !config.gcpLocation) {
       throw new HttpError(
         500,
