@@ -449,6 +449,112 @@ describe("chat service", () => {
     );
   });
 
+  it.each([
+    {
+      name: "Excel waybill guidance",
+      content: "დამეხმარე როგორ მოვიქცე ზედნადებები მაქვს ექსელში",
+      model: "declario-waybill-spreadsheet-help-v1",
+      contains: ["Excel", "მყიდველის ს/კ", "preview"],
+      notContains: ["ზედნადების ფოტო"],
+      generateWithTools: false,
+      embed: false,
+    },
+    {
+      name: "photo waybill guidance",
+      content: "ზედნადების ფოტო მაქვს და ჩატიდან როგორ გავაგზავნო?",
+      model: "declario-waybill-photo-help-v1",
+      contains: ["ფოტოს მიხედვით", "მყიდველის ს/კ", "შესწორება ჩატში"],
+      notContains: ["Excel ფაილი"],
+      generateWithTools: false,
+      embed: false,
+    },
+    {
+      name: "small entrepreneur income tax",
+      content: "საშემოსავლო როგორ შევავსო მცირე მეწარმის?",
+      model: "gemini-3.1-flash-lite-preview",
+      contains: ["Assistant answer"],
+      notContains: ["ამ თემაზე ვერ გიპასუხებთ"],
+      generateWithTools: true,
+      embed: true,
+    },
+    {
+      name: "RS.ge connection status",
+      content: "ჯერ დაკავშირებული რო არ მაქვს რს?",
+      model: "gemini-3.1-flash-lite-preview",
+      contains: ["Assistant answer"],
+      notContains: ["ამ თემაზე ვერ გიპასუხებთ"],
+      generateWithTools: true,
+      embed: false,
+    },
+    {
+      name: "general VAT knowledge",
+      content: "დღგ რა განაკვეთით იანგარიშება საქართველოში?",
+      model: "gemini-3.1-flash-lite-preview",
+      contains: ["Assistant answer"],
+      notContains: ["ამ თემაზე ვერ გიპასუხებთ"],
+      generateWithTools: true,
+      embed: true,
+    },
+    {
+      name: "off-topic political question",
+      content: "რას ფიქრობ სააკაშვილზე?",
+      model: "declario-domain-guard-v1",
+      contains: ["ფინანს"],
+      notContains: ["Assistant answer"],
+      generateWithTools: false,
+      embed: false,
+      blocked: true,
+    },
+  ])("routes real chat task: $name", async (task) => {
+    await sendConversationMessage(
+      {
+        companyId: TEST_COMPANY_ID,
+        conversationId: "conversation-1",
+        content: task.content,
+        metadata: {},
+        userId: "user-1",
+      },
+      gemini,
+    );
+
+    const calls = jest.mocked(chatRepository.persistChatTurn).mock.calls;
+    const persisted = calls[calls.length - 1]?.[0] as {
+      assistantContent: string;
+      assistantMetadata?: Record<string, unknown>;
+      assistantModel: string;
+    };
+    expect(persisted.assistantModel).toBe(task.model);
+    for (const expected of task.contains) {
+      expect(persisted.assistantContent).toContain(expected);
+    }
+    for (const unexpected of task.notContains) {
+      expect(persisted.assistantContent).not.toContain(unexpected);
+    }
+    if (task.blocked) {
+      expect(persisted.assistantMetadata).toEqual(
+        expect.objectContaining({
+          domainGuard: expect.objectContaining({ blocked: true }),
+        }),
+      );
+    } else {
+      expect(persisted.assistantMetadata).not.toEqual(
+        expect.objectContaining({
+          domainGuard: expect.objectContaining({ blocked: true }),
+        }),
+      );
+    }
+    if (task.generateWithTools) {
+      expect(gemini.generateWithTools).toHaveBeenCalled();
+    } else {
+      expect(gemini.generateWithTools).not.toHaveBeenCalled();
+    }
+    if (task.embed) {
+      expect(gemini.embed).toHaveBeenCalled();
+    } else {
+      expect(gemini.embed).not.toHaveBeenCalled();
+    }
+  });
+
   it("updates the latest parsed waybill image when the user sends a correction", async () => {
     const currentAttachment: attachmentRepository.ChatAttachmentRow = {
       id: "11111111-1111-1111-1111-111111111111",
