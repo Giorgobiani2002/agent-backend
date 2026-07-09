@@ -163,7 +163,14 @@ function isClearlyOffTopicChat(text: string): boolean {
 function looksLikeWaybillPhotoHelp(text: string): boolean {
   return (
     /(ზედნადებ|waybill)/i.test(text) &&
-    /(ფოტო|სურათ|image|photo|scan|სკან|ocr|ჩატიდან|შეგიძლია|როგორ|ატვირთ|გაგზავნ|ასწავლ|დამეხმარ)/i.test(text)
+    /(ფოტო|სურათ|image|photo|scan|სკან|ocr)/i.test(text)
+  );
+}
+
+function looksLikeWaybillSpreadsheetHelp(text: string): boolean {
+  return (
+    /(ზედნადებ|waybill)/i.test(text) &&
+    /(excel|xlsx|xls|spreadsheet|ცხრილ|ექსელ|ექსელში|ფაილ|სვეტ)/i.test(text)
   );
 }
 
@@ -185,6 +192,24 @@ function waybillPhotoHelpReply(): string {
     "5. მხოლოდ თქვენი აშკარა დადასტურების შემდეგ გავაგზავნი rs.ge-ზე.",
     "",
     "ყველაზე მნიშვნელოვანი: rs.ge-ზე გაგზავნა შეუქცევადია, ამიტომ სანამ ღილაკით დაადასტურებთ, preview აუცილებლად გადაამოწმეთ.",
+  ].join("\n");
+}
+
+function waybillSpreadsheetHelpReply(): string {
+  return [
+    "კი, Excel-იდანაც შემიძლია ზედნადებების მომზადება და rs.ge-ზე გაგზავნამდე preview-ს ჩვენება.",
+    "",
+    "როგორ მოიქცეთ:",
+    "1. ჩატში მიამაგრეთ Excel ფაილი (.xlsx ან .xls).",
+    "2. ერთ სტრიქონში უნდა იყოს ერთი საქონლის პოზიცია; ერთი ზედნადების რამდენიმე პოზიცია ერთიანდება document/order/reference ნომრით.",
+    "3. სასურველი სვეტებია: Document/Order Number, ზედნადების ტიპი, მყიდველის ს/კ, მყიდველი, გაგზავნის მისამართი, ჩაბარების მისამართი, მძღოლი, მანქანის ნომერი, საქონელი, ერთეული, რაოდენობა, ფასი.",
+    "4. თუ ზედნადების ტიპი არ გიწერიათ, სისტემა დროებით მონიშნავს ტრანსპორტირებას და preview-ში გეტყვით, რომ გადაამოწმოთ.",
+    "",
+    "ატვირთვის შემდეგ მე:",
+    "1. წავიკითხავ Excel-ს და დავაჯგუფებ ზედნადებებს.",
+    "2. გაჩვენებთ preview-ს: რამდენი ზედნადებია, მყიდველები, ტიპები, პოზიციები, ჯამები და გაფრთხილებები.",
+    "3. თუ რამე აკლია, გეტყვით რომელი სტრიქონი/ზედნადებია გასასწორებელი.",
+    "4. rs.ge-ზე გავგზავნი მხოლოდ თქვენი აშკარა დადასტურების შემდეგ.",
   ].join("\n");
 }
 
@@ -1318,6 +1343,42 @@ export async function sendConversationMessage(
   const waybillSpreadsheetAttachments = attachments.filter(
     (attachment) => attachment.kind === "waybill_spreadsheet",
   );
+
+  if (
+    attachments.length === 0 &&
+    looksLikeWaybillSpreadsheetHelp(content)
+  ) {
+    const assistantContent = waybillSpreadsheetHelpReply();
+    const persisted = await persistChatTurn({
+      conversationId: input.conversationId,
+      userContent: content,
+      userMetadata: input.metadata,
+      assistantContent,
+      assistantModel: "declario-waybill-spreadsheet-help-v1",
+      assistantMetadata: {
+        diagnosticMode: true,
+        voiceMode,
+        rag: {
+          topK: config.ragTopK,
+          documentLimit: config.ragDocumentLimit,
+          maxContextChars: config.ragMaxContextChars,
+          promptCharHardCap: config.ragPromptCharHardCap,
+          chunkAnchorWindow: config.ragChunkAnchorWindow,
+          chatTemperature: config.geminiChatTemperature,
+          includeModelKnowledge: config.ragIncludeModelKnowledge,
+          selectedBookIds: [],
+          totalDocuments: 0,
+          totalChunks: 0,
+          includedChunks: 0,
+          truncated: false,
+          documents: [],
+          contexts: [],
+        },
+      },
+      contexts: [],
+    });
+    return { ...persisted, contexts: [] };
+  }
 
   if (
     attachments.length === 0 &&

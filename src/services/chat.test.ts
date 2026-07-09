@@ -416,6 +416,39 @@ describe("chat service", () => {
     );
   });
 
+  it("explains the Excel waybill upload flow when the user mentions Excel", async () => {
+    await sendConversationMessage(
+      {
+        companyId: TEST_COMPANY_ID,
+        conversationId: "conversation-1",
+        content: "დამეხმარე როგორ მოვიქცე ზედნადებები მაქვს ექსელში",
+        metadata: {},
+        userId: "user-1",
+      },
+      gemini,
+    );
+
+    expect(gemini.embed).not.toHaveBeenCalled();
+    expect(gemini.generateWithTools).not.toHaveBeenCalled();
+    expect(chatRepository.persistChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantModel: "declario-waybill-spreadsheet-help-v1",
+        assistantContent: expect.stringContaining("Excel"),
+        contexts: [],
+      }),
+    );
+    expect(chatRepository.persistChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantContent: expect.stringContaining("მყიდველის ს/კ"),
+      }),
+    );
+    expect(chatRepository.persistChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantContent: expect.not.stringContaining("ზედნადების ფოტო"),
+      }),
+    );
+  });
+
   it("updates the latest parsed waybill image when the user sends a correction", async () => {
     const currentAttachment: attachmentRepository.ChatAttachmentRow = {
       id: "11111111-1111-1111-1111-111111111111",
