@@ -74,7 +74,7 @@ describe("waybill vision", () => {
     ]);
   });
 
-  it("uses the current chat model for vision by default without legacy fallbacks", async () => {
+  it("uses current chat/pro models for vision by default without legacy fallbacks", async () => {
     delete process.env.GEMINI_VISION_MODEL;
     delete process.env.GEMINI_VISION_FALLBACK_MODELS;
     process.env.GEMINI_CHAT_MODEL = "gemini-3.5-flash";
@@ -82,7 +82,10 @@ describe("waybill vision", () => {
 
     const { waybillVisionModelCandidates } = await import("./waybill-vision");
 
-    expect(waybillVisionModelCandidates()).toEqual(["gemini-3.5-flash"]);
+    expect(waybillVisionModelCandidates()).toEqual([
+      "gemini-3.5-flash",
+      "gemini-3.1-pro-preview",
+    ]);
   });
 
   it("retries the same current model on temporary high-demand errors", async () => {
@@ -236,6 +239,7 @@ describe("waybill vision", () => {
     ).map((call) => call[0].model);
     expect(calledModels).toEqual([
       "denied-model",
+      "gemini-3.1-pro-preview",
       "chat-denied-model",
     ]);
   });

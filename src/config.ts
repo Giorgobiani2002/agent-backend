@@ -25,6 +25,11 @@ function envCsv(name: string): string[] {
 
 const geminiChatModel = process.env.GEMINI_CHAT_MODEL ?? DEFAULT_GEMINI_CHAT_MODEL;
 const geminiChatFallbackModels = envCsv("GEMINI_CHAT_FALLBACK_MODELS");
+const resolvedGeminiChatFallbackModels =
+  geminiChatFallbackModels.length > 0
+    ? geminiChatFallbackModels
+    : DEFAULT_GEMINI_CHAT_FALLBACK_MODELS;
+const geminiVisionFallbackModels = envCsv("GEMINI_VISION_FALLBACK_MODELS");
 
 export const config = {
   openaiApiKey: process.env.OPENAI_API_KEY,
@@ -38,13 +43,13 @@ export const config = {
   // re-embedded in the same vector space.
   geminiEmbeddingModel: resolveGeminiEmbeddingModel(),
   geminiChatModel,
-  geminiChatFallbackModels:
-    geminiChatFallbackModels.length > 0
-      ? geminiChatFallbackModels
-      : DEFAULT_GEMINI_CHAT_FALLBACK_MODELS,
+  geminiChatFallbackModels: resolvedGeminiChatFallbackModels,
   geminiPlaybookModel: process.env.GEMINI_PLAYBOOK_MODEL ?? DEFAULT_GEMINI_CHAT_MODEL,
   geminiVisionModel: process.env.GEMINI_VISION_MODEL ?? geminiChatModel,
-  geminiVisionFallbackModels: envCsv("GEMINI_VISION_FALLBACK_MODELS"),
+  geminiVisionFallbackModels:
+    geminiVisionFallbackModels.length > 0
+      ? geminiVisionFallbackModels
+      : resolvedGeminiChatFallbackModels,
   geminiVisionMaxAttempts: Number(process.env.GEMINI_VISION_MAX_ATTEMPTS ?? 4),
   geminiSttModel: process.env.GEMINI_STT_MODEL ?? "gemini-3.1-flash-lite-preview",
   geminiSttFallbackModel: process.env.GEMINI_STT_FALLBACK_MODEL ?? DEFAULT_GEMINI_CHAT_MODEL,
