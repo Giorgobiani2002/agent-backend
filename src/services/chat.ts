@@ -140,21 +140,28 @@ function isInScopeChatTopic(text: string): boolean {
 function looksLikeWaybillPhotoHelp(text: string): boolean {
   return (
     /(ზედნადებ|waybill)/i.test(text) &&
-    /(ფოტო|სურათ|image|photo|scan|სკან|ocr|ჩატიდან|შეგიძლია|როგორ)/i.test(text)
+    /(ფოტო|სურათ|image|photo|scan|სკან|ocr|ჩატიდან|შეგიძლია|როგორ|ატვირთ|გაგზავნ|ასწავლ|დამეხმარ)/i.test(text)
   );
 }
 
 function waybillPhotoHelpReply(): string {
   return [
-    "კი, შემიძლია ფოტოდან ზედნადების მომზადება.",
+    "კი, შემიძლია ჩატიდან ფოტოს მიხედვით ზედნადების მომზადება და rs.ge-ზე გაგზავნამდე გადამოწმება.",
     "",
-    "როგორ ქნათ:",
-    "1. ამ ჩატში მიამაგრეთ ზედნადების მკაფიო ფოტო.",
-    "2. მე ამოვიკითხავ მყიდველს, ს/კ-ს, მისამართებს, საქონელს, რაოდენობას და ფასს.",
-    "3. გაჩვენებთ preview-ს და გაფრთხილებებს.",
-    "4. მხოლოდ თქვენი დადასტურების შემდეგ გავაგზავნი rs.ge-ზე.",
+    "როგორ ატვირთოთ:",
+    "1. დააჭირეთ მიმაგრების ღილაკს და აირჩიეთ ზედნადების ფოტო.",
+    "2. ფოტო უნდა იყოს მკაფიო, სწორად მოჭრილი და არა გვერდულად გადაღებული.",
+    "3. ერთ ფოტოში სასურველია მთლიანად ჩანდეს დოკუმენტი, განსაკუთრებით მყიდველის ს/კ, მისამართები, საქონლის დასახელება, რაოდენობა და ფასი.",
+    "4. თუ რამდენიმე გვერდია ან ტექსტი პატარაა, ატვირთეთ უფრო ახლო/მკვეთრი ფოტოებიც.",
     "",
-    "ფოტოზე აუცილებლად ჩანდეს მყიდველის ს/კ, საქონლის დასახელება, რაოდენობა და ფასი. გაგზავნა შეუქცევადია, ამიტომ ჯერ ყოველთვის გადამოწმებას გაჩვენებთ.",
+    "ამის შემდეგ მე:",
+    "1. ამოვიკითხავ მონაცემებს ფოტოდან.",
+    "2. გაჩვენებთ preview-ს: მყიდველი, ს/კ, მისამართები, საქონელი, რაოდენობა, ფასი და ჯამი.",
+    "3. გეტყვით თუ რამე აკლია ან საეჭვოდ იკითხება.",
+    "4. თუ რამე არასწორია, მომწერეთ შესწორება ჩატში, მაგალითად: \"მყიდველის ს/კ არის ...\" ან \"რაოდენობა არის 3\".",
+    "5. მხოლოდ თქვენი აშკარა დადასტურების შემდეგ გავაგზავნი rs.ge-ზე.",
+    "",
+    "ყველაზე მნიშვნელოვანი: rs.ge-ზე გაგზავნა შეუქცევადია, ამიტომ სანამ ღილაკით დაადასტურებთ, preview აუცილებლად გადაამოწმეთ.",
   ].join("\n");
 }
 
@@ -458,6 +465,8 @@ function buildContextPrompt(context: ComprehensiveContext): string {
     "Preserve all relevant rules, conditions, exceptions, dates, amounts, percentages, steps, formulas, fields, and caveats from the sources.",
     "For step-by-step or procedural questions (e.g. how to file, upload, or submit): include every step that appears in the sources for that procedure, in order, through the final step in the sources. Do not stop after an early numbered section if later chunks continue the same procedure.",
     "If multiple sources contribute, combine them into one coherent answer rather than relying on only the first match.",
+    "Declario free-plan users may only have chat and waybill workflows available. When a user asks how to use Declario, prioritize chat-driven waybill help: photo upload, spreadsheet upload, order/date preview, review, correction, and explicit confirmation before sending to rs.ge.",
+    "Waybill photo upload is supported in chat. Teach it proactively: ask the user to attach a clear, upright, uncropped image where buyer TIN, addresses, item names, quantities and prices are readable; explain that the system extracts a preview, highlights missing/uncertain fields, accepts corrections in chat, and sends to rs.ge only after explicit confirmation.",
     "Cite sources inline using [n] for whole-source references and [n.k] for specific chunks (n is the source number, k is the chunk_index).",
     context.truncated
       ? "Note: some source chunks were omitted to fit the context budget. If the user's question covers an area that may have been truncated, say so explicitly."
@@ -732,7 +741,7 @@ function waybillPreviewText(action: WaybillPendingAction, extraction: WaybillExt
     .map((i) => `- ${i.name}: ${i.quantity} × ${money(i.price)} = ${money(i.quantity * i.price)} GEL`);
   const moreCount = action.items.length - Math.min(action.items.length, 10);
   return [
-    "ფოტოდან ზედნადები წავიკითხე. გადაამოწმეთ მონაცემები და დაადასტურეთ გასაგზავნად.",
+    "ფოტოდან ზედნადები წავიკითხე. ჯერ გადაამოწმეთ მონაცემები; rs.ge-ზე გაგზავნას მხოლოდ თქვენი დადასტურების შემდეგ გავაკეთებ.",
     "",
     `მყიდველი: ${action.buyerName || "—"}${action.buyerTin ? ` (ს/კ ${action.buyerTin})` : ""}`,
     ...(action.startAddress ? [`გაგზავნის მისამართი: ${action.startAddress}`] : []),
@@ -745,7 +754,7 @@ function waybillPreviewText(action: WaybillPendingAction, extraction: WaybillExt
     `ჯამი: ${money(action.totalAmount)} GEL`,
     ...(action.warnings.length ? ["", "გასათვალისწინებელი:", ...action.warnings.map((w) => `- ${w}`)] : []),
     "",
-    "ქვემოთ მოცემული ღილაკით გააგზავნეთ rs.ge-ზე.",
+    "თუ რამე არასწორია, მომწერეთ შესწორება ჩატში, მაგალითად: \"მყიდველის ს/კ არის ...\" ან \"პირველი პოზიციის რაოდენობა არის 3\". თუ ყველაფერი სწორია, ქვემოთ მოცემული ღილაკით დაადასტურეთ გაგზავნა rs.ge-ზე.",
   ].join("\n");
 }
 
@@ -774,7 +783,7 @@ function buildWaybillWorkflowResult(imageAttachments: ChatAttachmentRow[]): {
     return {
       text: [
         "ამ ფოტოზე ზედნადები ვერ ამოვიცანი.",
-        "გთხოვთ ატვირთოთ ზედნადების მკაფიო ფოტო, სადაც ჩანს მყიდველი, საქონელი, რაოდენობა და ფასი.",
+        "გთხოვთ ატვირთოთ უფრო მკაფიო, სწორად მოჭრილი ფოტო, სადაც ჩანს მყიდველის ს/კ, მისამართები, საქონლის დასახელება, რაოდენობა და ფასი. თუ დოკუმენტი რამდენიმე გვერდია, ატვირთეთ ყველა გვერდი ცალ-ცალკე.",
       ].join("\n"),
     };
   }
@@ -783,7 +792,7 @@ function buildWaybillWorkflowResult(imageAttachments: ChatAttachmentRow[]): {
     return {
       text: [
         "ფოტოდან ზედნადები წავიკითხე, მაგრამ მყიდველის საიდენტიფიკაციო ნომერი (ს/კ) ვერ ამოვიკითხე — ის rs.ge-ზე გასაგზავნად აუცილებელია.",
-        "გთხოვთ ატვირთოთ ფოტო, სადაც მყიდველის ს/კ მკაფიოდ ჩანს.",
+        "შეგიძლიათ ან ატვირთოთ უფრო მკაფიო ფოტო, სადაც მყიდველის ს/კ ჩანს, ან მომწეროთ ჩატში: \"მყიდველის ს/კ არის ...\".",
         ...(extraction.warnings.length ? ["", ...extraction.warnings.map((w) => `- ${w}`)] : []),
       ].join("\n"),
     };

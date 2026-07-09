@@ -350,8 +350,18 @@ describe("chat service", () => {
     expect(chatRepository.persistChatTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         assistantModel: "declario-waybill-photo-help-v1",
-        assistantContent: expect.stringContaining("შემიძლია ფოტოდან"),
+        assistantContent: expect.stringContaining("ფოტოს მიხედვით"),
         contexts: [],
+      }),
+    );
+    expect(chatRepository.persistChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantContent: expect.stringContaining("მყიდველის ს/კ"),
+      }),
+    );
+    expect(chatRepository.persistChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantContent: expect.stringContaining("შესწორება ჩატში"),
       }),
     );
     expect(chatRepository.persistChatTurn).toHaveBeenCalledWith(
