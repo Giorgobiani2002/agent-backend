@@ -137,6 +137,27 @@ function isInScopeChatTopic(text: string): boolean {
   );
 }
 
+function looksLikeWaybillPhotoHelp(text: string): boolean {
+  return (
+    /(ზედნადებ|waybill)/i.test(text) &&
+    /(ფოტო|სურათ|image|photo|scan|სკან|ocr|ჩატიდან|შეგიძლია|როგორ)/i.test(text)
+  );
+}
+
+function waybillPhotoHelpReply(): string {
+  return [
+    "კი, შემიძლია ფოტოდან ზედნადების მომზადება.",
+    "",
+    "როგორ ქნათ:",
+    "1. ამ ჩატში მიამაგრეთ ზედნადების მკაფიო ფოტო.",
+    "2. მე ამოვიკითხავ მყიდველს, ს/კ-ს, მისამართებს, საქონელს, რაოდენობას და ფასს.",
+    "3. გაჩვენებთ preview-ს და გაფრთხილებებს.",
+    "4. მხოლოდ თქვენი დადასტურების შემდეგ გავაგზავნი rs.ge-ზე.",
+    "",
+    "ფოტოზე აუცილებლად ჩანდეს მყიდველის ს/კ, საქონლის დასახელება, რაოდენობა და ფასი. გაგზავნა შეუქცევადია, ამიტომ ჯერ ყოველთვის გადამოწმებას გაჩვენებთ.",
+  ].join("\n");
+}
+
 function domainGuardReply(text: string, voiceMode: boolean): string | null {
   if (isInScopeChatTopic(text)) return null;
   if (voiceMode) {
@@ -1210,6 +1231,43 @@ export async function sendConversationMessage(
   const waybillSpreadsheetAttachments = attachments.filter(
     (attachment) => attachment.kind === "waybill_spreadsheet",
   );
+
+  if (
+    attachments.length === 0 &&
+    looksLikeWaybillPhotoHelp(content)
+  ) {
+    const assistantContent = waybillPhotoHelpReply();
+    const persisted = await persistChatTurn({
+      conversationId: input.conversationId,
+      userContent: content,
+      userMetadata: input.metadata,
+      assistantContent,
+      assistantModel: "declario-waybill-photo-help-v1",
+      assistantMetadata: {
+        diagnosticMode: true,
+        voiceMode,
+        rag: {
+          topK: config.ragTopK,
+          documentLimit: config.ragDocumentLimit,
+          maxContextChars: config.ragMaxContextChars,
+          promptCharHardCap: config.ragPromptCharHardCap,
+          chunkAnchorWindow: config.ragChunkAnchorWindow,
+          chatTemperature: config.geminiChatTemperature,
+          includeModelKnowledge: config.ragIncludeModelKnowledge,
+          selectedBookIds: [],
+          totalDocuments: 0,
+          totalChunks: 0,
+          includedChunks: 0,
+          truncated: false,
+          documents: [],
+          contexts: [],
+        },
+      },
+      contexts: [],
+    });
+    return { ...persisted, contexts: [] };
+  }
+
   if (attachments.length === 0 && looksLikeWaybillCorrection(content)) {
     const latestImage = await getLatestParsedAttachment({
       companyId: input.companyId,

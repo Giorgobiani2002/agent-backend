@@ -333,6 +333,34 @@ describe("chat service", () => {
     );
   });
 
+  it("explains the waybill photo upload flow without denying OCR support", async () => {
+    await sendConversationMessage(
+      {
+        companyId: TEST_COMPANY_ID,
+        conversationId: "conversation-1",
+        content: "ზედნადების ატვირთვა ფოტოდან მინდა, ეგ არ შეგიძლია?",
+        metadata: {},
+        userId: "user-1",
+      },
+      gemini,
+    );
+
+    expect(gemini.embed).not.toHaveBeenCalled();
+    expect(gemini.generateWithTools).not.toHaveBeenCalled();
+    expect(chatRepository.persistChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantModel: "declario-waybill-photo-help-v1",
+        assistantContent: expect.stringContaining("შემიძლია ფოტოდან"),
+        contexts: [],
+      }),
+    );
+    expect(chatRepository.persistChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantContent: expect.not.stringContaining("არ ხორციელდება"),
+      }),
+    );
+  });
+
   it("updates the latest parsed waybill image when the user sends a correction", async () => {
     const currentAttachment: attachmentRepository.ChatAttachmentRow = {
       id: "11111111-1111-1111-1111-111111111111",
