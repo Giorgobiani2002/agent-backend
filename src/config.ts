@@ -59,7 +59,7 @@ export const config = {
   s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? "",
   // Google Cloud / Vertex AI
   /** GCP project ID linked to the credit-backed billing account. */
-  gcpProjectId: process.env.GCP_PROJECT_ID ?? "gen-lang-client-0730194112",
+  gcpProjectId: process.env.GCP_PROJECT_ID ?? "gen-lang-client-0734367816",
   /** Vertex AI region; global endpoint supports the latest Gemini models. */
   gcpLocation: process.env.GCP_LOCATION ?? "global",
   /** Service-account JSON for non-GCP hosts such as Railway. Local development can use ADC. */
@@ -67,5 +67,5 @@ export const config = {
   /** Temporary private media bucket used for Vertex video understanding. */
   gcpMediaBucket:
     process.env.GCP_MEDIA_BUCKET ??
-    `declario-vertex-media-${process.env.GCP_PROJECT_ID ?? "gen-lang-client-0730194112"}`,
+    `declario-vertex-media-${process.env.GCP_PROJECT_ID ?? "gen-lang-client-0734367816"}`,
 };
