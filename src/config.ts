@@ -1,24 +1,36 @@
+const GEMINI_VERTEX_EMBEDDING_MODEL = "gemini-embedding-2";
+
+const LEGACY_VERTEX_EMBEDDING_MODELS: Record<string, string> = {
+  // Keep the vector space stable for the existing vector(1536) corpus.
+  "text-embedding-005": GEMINI_VERTEX_EMBEDDING_MODEL,
+};
+
+export function resolveGeminiEmbeddingModel(rawModel = process.env.GEMINI_EMBEDDING_MODEL): string {
+  const trimmed = rawModel?.trim();
+  if (!trimmed) return GEMINI_VERTEX_EMBEDDING_MODEL;
+
+  const modelResourceMatch = trimmed.match(/(?:^|\/)models\/([^/]+)$/);
+  const modelName = modelResourceMatch?.[1] ?? trimmed.replace(/^models\//, "");
+  return LEGACY_VERTEX_EMBEDDING_MODELS[modelName] ?? modelName;
+}
+
 export const config = {
   openaiApiKey: process.env.OPENAI_API_KEY,
 
-  // Gemini API key (AI Studio). Billing routes through the Gemini API SKU so
-  // the $1,000 GenAI App Builder credit applies. (Calling via Vertex AI —
-  // GoogleGenAI({ vertexai: true }) — bills as "Vertex AI", which the credit
-  // does NOT cover.)
-  geminiApiKey: process.env.GEMINI_API_KEY ?? "",
+  // All Gemini-family model calls route through Vertex AI / Gemini Enterprise.
+  // Configure auth with GCP_PROJECT_ID, GCP_LOCATION, and either ADC or
+  // GCP_SERVICE_ACCOUNT_JSON. AI Studio GEMINI_API_KEY is intentionally unused.
 
-  // NOTE: keep model + dimensions in lockstep with the pgvector schema —
+  // NOTE: keep model + dimensions in lockstep with the pgvector schema.
   // book_chunks.embedding is vector(1536) and the whole corpus is embedded
-  // with gemini-embedding-2 @1536. Verified: gemini-embedding-2 @1536 returns
-  // identical dimensions on the Gemini API, so the Vertex→Gemini-API switch
-  // needs no re-embed. (text-embedding-005 404s on the API key / 768 dims only.)
-  geminiEmbeddingModel: process.env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-2",
+  // with gemini-embedding-2 @1536. Keep this model stable unless the corpus is
+  // re-embedded in the same vector space.
+  geminiEmbeddingModel: resolveGeminiEmbeddingModel(),
   geminiChatModel: process.env.GEMINI_CHAT_MODEL ?? "gemini-3.5-flash",
   geminiPlaybookModel: process.env.GEMINI_PLAYBOOK_MODEL ?? "gemini-3.5-flash",
   geminiSttModel: process.env.GEMINI_STT_MODEL ?? "gemini-3.1-flash-lite-preview",
   geminiSttFallbackModel: process.env.GEMINI_STT_FALLBACK_MODEL ?? "gemini-2.5-flash",
-  // Gemini-API TTS model (the Vertex name gemini-2.5-flash-tts 404s on the API);
-  // gemini-3.1-flash-tts-preview returns PCM s16le @24kHz mono → pcmToWav.
+  // Vertex TTS model returns PCM s16le @24kHz mono -> pcmToWav.
   geminiTtsModel: process.env.GEMINI_TTS_MODEL ?? "gemini-3.1-flash-tts-preview",
   geminiTtsVoice: process.env.GEMINI_TTS_VOICE ?? "Kore",
   geminiEmbeddingDimensions: Number(process.env.GEMINI_EMBEDDING_DIMENSIONS ?? 1536),
@@ -31,7 +43,7 @@ export const config = {
   ragMaxContextChars: Number(process.env.RAG_MAX_CONTEXT_CHARS ?? 140000),
   /** Final assembled context prompt cap (instructions + sources); avoids oversized Gemini requests. */
   ragPromptCharHardCap: Number(process.env.RAG_PROMPT_CHAR_HARD_CAP ?? 155000),
-  /** Chunks on each side of the min–max seed span per book; included first when the full doc does not fit the char budget. */
+  /** Chunks on each side of the min-max seed span per book; included first when the full doc does not fit the char budget. */
   ragChunkAnchorWindow: Number(process.env.RAG_CHUNK_ANCHOR_WINDOW ?? 40),
   ragIncludeModelKnowledge: process.env.RAG_INCLUDE_MODEL_KNOWLEDGE !== "false",
   /** rs-server base URL for the internal-tools surface used by chat tool-calling. */
@@ -45,10 +57,10 @@ export const config = {
   s3Bucket: process.env.S3_BUCKET ?? "",
   s3AccessKeyId: process.env.S3_ACCESS_KEY_ID ?? "",
   s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? "",
-  // ── Google Cloud / Vertex AI ────────────────────────────────────────────────
-  /** GCP project ID linked to the $1,000 GenAI App Builder credit. */
+  // Google Cloud / Vertex AI
+  /** GCP project ID linked to the credit-backed billing account. */
   gcpProjectId: process.env.GCP_PROJECT_ID ?? "gen-lang-client-0730194112",
-  /** Vertex AI region — global endpoint supports all latest models. */
+  /** Vertex AI region; global endpoint supports the latest Gemini models. */
   gcpLocation: process.env.GCP_LOCATION ?? "global",
   /** Service-account JSON for non-GCP hosts such as Railway. Local development can use ADC. */
   gcpServiceAccountJson: process.env.GCP_SERVICE_ACCOUNT_JSON,

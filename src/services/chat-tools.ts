@@ -204,6 +204,46 @@ export const CHAT_TOOLS: ChatTool[] = [
     },
   },
   {
+    name: "get_taxpayer_info",
+    description:
+      "Look up a Georgian taxpayer's public info on rs.ge by TIN (საიდენტიფიკაციო კოდი) — name, legal form, status and VAT registration. Use to verify a buyer/counterparty before issuing a waybill or invoice, or to check the company's own standing.",
+    parameters: {
+      type: "object",
+      properties: {
+        tin: {
+          type: "string",
+          description: "taxpayer identification code (TIN / საიდენტიფიკაციო კოდი)",
+        },
+      },
+      required: ["tin"],
+    },
+    async handler(ctx, args) {
+      const tin = str(args.tin);
+      if (!tin) return { error: "tin is required" };
+      return safeRsGet(`/internal/tools/taxpayer/info`, ctx, { tin });
+    },
+  },
+  {
+    name: "check_submission_eligibility",
+    description:
+      "Check whether the company is eligible to file BEFORE submitting — verifies rs.ge taxpayer status, VAT registration and tax debt (a debt ≥ 50,000 GEL triggers the special invoice rule, N3751). Returns a verdict (pass/warn/block) with reasons. Use before filing a VAT return or issuing invoices, or when the user asks 'can we file' / wants to pre-empt a rejection.",
+    parameters: {
+      type: "object",
+      properties: {
+        docType: {
+          type: "string",
+          enum: ["vat", "invoice", "waybill"],
+          description: "what is about to be filed; defaults to vat",
+        },
+      },
+    },
+    async handler(ctx, args) {
+      return safeRsGet(`/internal/tools/taxpayer/eligibility`, ctx, {
+        docType: str(args.docType),
+      });
+    },
+  },
+  {
     name: "draft_vat_return",
     description:
       "Draft and explain the company's monthly VAT (დღგ) return for a period. Computes output VAT (from sales invoices), input VAT (from ACCEPTED purchase invoices) and net VAT payable from the invoices synced to declario, returning totals, invoice counts, sample invoice ids and warnings. Use when the user asks to prepare/draft/explain their VAT for a month. The Georgian VAT rate is 18%. IMPORTANT: rs.ge has NO declaration API — this only DRAFTS the figures; the actual return is filed in the rs.ge UI. Ground the explanation in the Tax Code articles from the knowledge base and surface any warnings (e.g. input VAT not synced).",
@@ -411,13 +451,40 @@ export const CHAT_TOOLS: ChatTool[] = [
           description:
             "Set true ONLY after the user has explicitly approved filing this specific declaration in the conversation. Omit/false to just prepare and ask for confirmation.",
         },
+        declaration_id: {
+          type: "string",
+          description: "Required when confirm=true. Use the declaration_id returned by the prepare step.",
+        },
+        approval_id: {
+          type: "string",
+          description: "Required when confirm=true. Use prepared.approval.id from the prepare step.",
+        },
+        snapshot_hash: {
+          type: "string",
+          description: "Required when confirm=true. Use prepared.approval.snapshot_hash from the prepare step.",
+        },
       },
     },
     async handler(ctx, args) {
       const year = num(args.year);
       const month = num(args.month);
       if (args.confirm === true) {
-        return safeRsPost(`/internal/tools/declarations/file`, ctx, { year, month });
+        const declarationId = str(args.declaration_id);
+        const approvalId = str(args.approval_id);
+        const snapshotHash = str(args.snapshot_hash);
+        if (!declarationId || !approvalId || !snapshotHash) {
+          return {
+            error:
+              "confirm=true requires declaration_id, approval_id and snapshot_hash from the prepare result",
+            requiresConfirmation: true,
+          };
+        }
+        return safeRsPost(`/internal/tools/declarations/file`, ctx, {
+          declaration_id: declarationId,
+          approval_id: approvalId,
+          snapshot_hash: snapshotHash,
+          safety_mode: "halt-on-dangerous",
+        });
       }
       const prepared = await safeRsPost(`/internal/tools/declarations/prepare`, ctx, {
         year,
@@ -426,7 +493,7 @@ export const CHAT_TOOLS: ChatTool[] = [
       return {
         requiresConfirmation: true,
         prepared,
-        note: "Draft prepared but NOT filed. Show the figures and ask the user to confirm; only then call file_vat_return again with confirm=true.",
+        note: "Draft prepared but NOT filed. Show the figures and ask the user to confirm; only then call file_vat_return again with confirm=true and the returned declaration_id, approval.id and approval.snapshot_hash.",
       };
     },
   },
@@ -467,7 +534,7 @@ export const CHAT_TOOLS: ChatTool[] = [
   {
     name: "upload_waybills_for_date",
     description:
-      "Create AND send waybills (ზედნადები) to rs.ge from the company's orders for a date ('ატვირთე/გააგზავნე ზედნადები [date]-ის შეკვეთებზე'). STRICT TWO-STEP SAFETY: (1) call WITHOUT confirm — it returns the buildable-waybill preview (per order: buyer, goods, amount, warnings), existing drafts that will be sent, orders already sent, and totals; show this and ask the user to approve sending. (2) Call again with confirm=true ONLY after the user explicitly approves in this conversation. Sending is IRREVERSIBLE on rs.ge. Never set confirm=true on your own. Safe to re-run: already-sent orders are skipped and existing drafts are sent, not duplicated.",
+      "Create AND send waybills (ზედნადები) to rs.ge from the company's orders for a date ('ატვირთე/გააგზავნე ზედნადები [date]-ის შეკვეთებზე'). STRICT TWO-STEP SAFETY: (1) call WITHOUT confirm — it returns the buildable-waybill preview (per order: buyer, goods, amount, warnings), existing drafts that will be sent, orders already sent, totals, and confirmation_order_ids; show this and ask the user to approve sending. (2) Call again with confirm=true ONLY after the user explicitly approves in this conversation, passing orderIds copied from confirmation_order_ids so the sent set exactly matches the preview. Sending is IRREVERSIBLE on rs.ge. Never set confirm=true on your own. Safe to re-run: already-sent orders are skipped and existing drafts are sent, not duplicated.",
     parameters: {
       type: "object",
       properties: {
@@ -498,6 +565,12 @@ export const CHAT_TOOLS: ChatTool[] = [
         return { error: "Provide a date (YYYY-MM-DD) or orderIds" };
       }
       if (args.confirm === true) {
+        if (!orderIds || orderIds.length === 0) {
+          return {
+            error:
+              "confirmation_order_ids are required before confirm=true. Preview first, then pass prepared.confirmation_order_ids as orderIds.",
+          };
+        }
         return safeRsPost(`/internal/tools/waybills/upload-from-orders`, ctx, {
           date,
           orderIds,
@@ -511,7 +584,7 @@ export const CHAT_TOOLS: ChatTool[] = [
       return {
         requiresConfirmation: true,
         prepared,
-        note: "Waybills built but NOT sent. Show the buyers, goods, amounts, totals and any warnings; note which orders are skipped (already sent) and which existing drafts will be sent. Only call upload_waybills_for_date again with confirm=true after the user explicitly approves sending.",
+        note: "Waybills built but NOT sent. Show the buyers, goods, amounts, totals and any warnings; note which orders are skipped (already sent) and which existing drafts will be sent. If the user explicitly approves, call upload_waybills_for_date again with confirm=true and pass orderIds from prepared.confirmation_order_ids; never confirm by date alone.",
       };
     },
   },
@@ -1665,8 +1738,8 @@ export function chatToolSystemInstruction(): string {
     "Computing or verifying THE COMPANY'S OWN figures for a period is LIVE DATA, not a general question — call the matching tool and base every number strictly on its result, reading out any warnings or discrepancies: `draft_vat_return` for VAT (დღგ); `draft_payroll` for payroll/salaries (ხელფასები — gross / income tax 20% / pension); `audit_vat_submission` to CHECK/VERIFY an already-prepared or submitted VAT declaration against current data ('გადაამოწმე ჩემი ატვირთული დღგ', 'is my submitted VAT correct'). Do NOT call these for GENERAL questions — the rate, definitions, how a rule works, or how to fill a form — answer those from the knowledge base, citing the relevant articles. For profit tax (მოგების გადასახადი) use `draft_profit_tax`, extracting the distribution events (dividends, non-business expenses, free supplies, representation over limit) and their net amounts from the user's message. There is no computation tool yet for the small-business 1% tax — for it, compute 1% of the turnover the user states, citing the knowledge base.",
     "Disambiguate Georgian salary requests carefully. If the user provides a pasted/parsed employee list and asks to add/import salaries, call `import_employees`, then `draft_payroll`. If the employee records already exist and the user asks to upload/file/send payroll for a period ('ხელფასები ამიტვირთე/გააგზავნე/დააფიქსირე'), use `file_payroll`.",
     "To FILE payroll on rs.ge use `file_payroll` with the same strict two-step protocol: first prepare without confirm and show the exact period, employee count, gross, income tax, pension, net, warnings and approval expiry; only call again with confirm=true after explicit approval of that preview, passing the exact payroll_run_id, approval_id and snapshot_hash returned by preparation. The server rejects stale, expired, reused or cross-user approvals. Never claim it is submitted merely because the playbook was dispatched; report the returned runtime status and receipt.",
-    "To FILE/submit a VAT declaration on rs.ge ('დააფიქსირე/გააგზავნე ჩემი დღგ') use `file_vat_return` with a STRICT two-step protocol: first call it WITHOUT confirm to prepare and show the figures, then ask the user to explicitly approve filing THIS declaration; only call it again with confirm=true AFTER the user clearly says yes in this conversation. NEVER set confirm=true on your own initiative, and never claim a declaration is 'filed/submitted' until the tool result confirms it. (Filing runs the rs.ge playbook in halt-on-dangerous mode: it fills the form and stops before the final submit for the user to finalize.) For PAYROLL there is no chat filing tool — payroll filing needs a real user's approval in the dashboard. The chat can draft_payroll (compute) and import_employees, but tell the user to file the payroll declaration from the Payroll page.",
-    "To CREATE AND SEND waybills (ზედნადები) to rs.ge from the company's orders ('ატვირთე/გააგზავნე ზედნადები [date]-ის შეკვეთებზე') use `upload_waybills_for_date` with the SAME strict two-step protocol: first call it WITHOUT confirm to build the preview, then show the per-order buyers, goods, amounts, totals and warnings, note which orders are skipped (already sent) and which existing drafts will be sent, and ask the user to explicitly approve sending. Only call it again with confirm=true AFTER the user clearly says yes. NEVER set confirm=true on your own. Sending is irreversible on rs.ge; never claim a waybill is sent until the tool result confirms it. Use `preview_waybills_from_orders` for a no-send dry run. For one-off lifecycle actions on an existing waybill (by its numeric rs.ge id) use `send_waybill`/`confirm_waybill`/`close_waybill`/`reject_waybill`/`delete_waybill` — these are irreversible and gate through human approval (except deleting an unsent draft, which is auto-approved).",
+    "To FILE/submit a VAT declaration on rs.ge ('დააფიქსირე/გააგზავნე ჩემი დღგ') use `file_vat_return` with a STRICT two-step protocol: first call it WITHOUT confirm to prepare and show the figures, then ask the user to explicitly approve filing THIS declaration; only call it again with confirm=true AFTER the user clearly says yes in this conversation, passing the returned declaration_id, approval.id and approval.snapshot_hash. NEVER set confirm=true on your own initiative, and never claim a declaration is 'filed/submitted' until the tool result confirms it. (Filing runs the rs.ge playbook in halt-on-dangerous mode: it fills the form and stops before the final submit for the user to finalize.) For PAYROLL there is no chat filing tool — payroll filing needs a real user's approval in the dashboard. The chat can draft_payroll (compute) and import_employees, but tell the user to file the payroll declaration from the Payroll page.",
+    "To CREATE AND SEND waybills (ზედნადები) to rs.ge from the company's orders ('ატვირთე/გააგზავნე ზედნადები [date]-ის შეკვეთებზე') use `upload_waybills_for_date` with the SAME strict two-step protocol: first call it WITHOUT confirm to build the preview, then show the per-order buyers, goods, amounts, totals and warnings, note which orders are skipped (already sent) and which existing drafts will be sent, and ask the user to explicitly approve sending. Only call it again with confirm=true AFTER the user clearly says yes, passing orderIds copied from the preview's confirmation_order_ids so new orders cannot sneak in after preview. NEVER set confirm=true on your own or confirm by date alone. Sending is irreversible on rs.ge; never claim a waybill is sent until the tool result confirms it. Use `preview_waybills_from_orders` for a no-send dry run. For one-off lifecycle actions on an existing waybill (by its numeric rs.ge id) use `send_waybill`/`confirm_waybill`/`close_waybill`/`reject_waybill`/`delete_waybill` — these are irreversible and gate through human approval (except deleting an unsent draft, which is auto-approved).",
     "To ISSUE/register tax invoices (ანგარიშ-ფაქტურა) on rs.ge from the company's orders ('ამიწერე/ატვირთე ფაქტურები [date]-ის შეკვეთებზე') use `upload_invoices_for_date` with the same strict two-step protocol: preview WITHOUT confirm (buyers, gross/taxable/VAT, linked waybills, warnings, skipped already-invoiced orders, confirmation_order_ids) → explicit user approval → confirm=true with orderIds copied from confirmation_order_ids. Issuing an invoice is legally binding; never claim one is issued until the tool result confirms it, and never confirm by date alone because new orders may appear after the preview. This creates/registers the invoice on rs.ge; it does not perform a separate buyer-present/send step. `preview_invoices_from_orders` is the no-write dry run. To READ invoices: `search_invoices` (local mirror, fast) vs `list_live_invoices` (queries rs.ge directly — use for current statuses or 'invoices waiting for my reaction'); `get_invoice` fetches one with line items. `sync_invoices` refreshes the mirror for a period — run it before VAT work if figures look stale. For reacting to a RECEIVED invoice use `accept_invoice` (needs the rs.ge status code — read the invoice first) or `reject_invoice` (with a reason); for fixing an ISSUED one use `correct_invoice` (1=cancel, 2=change operation type, 3=price change, 4=goods return). These three are irreversible and always queue for human approval.",
     "When the user asks a general accounting/tax-code question (definitions, how a rule works, what the law says — not their own numbers), answer from your training and the RAG context (no tool call needed), citing the relevant articles.",
     "After tool results come back, write a concise human answer. Quote specific IDs and short error excerpts so the user can navigate to the right page.",

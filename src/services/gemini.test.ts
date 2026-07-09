@@ -23,6 +23,46 @@ describe("geminiService", () => {
     );
   });
 
+  it("maps legacy embedding model env names to the configured Vertex embedding model", async () => {
+    const previousModel = process.env.GEMINI_EMBEDDING_MODEL;
+    const previousDimensions = process.env.GEMINI_EMBEDDING_DIMENSIONS;
+    const embedContent = jest.fn(async () => ({
+      embeddings: [{ values: [0.25, 0.75] }],
+    }));
+
+    try {
+      process.env.GEMINI_EMBEDDING_MODEL = "models/text-embedding-005";
+      delete process.env.GEMINI_EMBEDDING_DIMENSIONS;
+      jest.doMock("./vertex", () => ({
+        getVertexClient: () => ({ models: { embedContent } }),
+        resetVertexClient: jest.fn(),
+      }));
+      jest.resetModules();
+
+      const { geminiService } = await import("./gemini");
+
+      await expect(geminiService.embed("hello")).resolves.toEqual([0.25, 0.75]);
+      expect(embedContent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: "gemini-embedding-2",
+          contents: "hello",
+          config: { outputDimensionality: 1536 },
+        }),
+      );
+    } finally {
+      if (previousModel === undefined) {
+        delete process.env.GEMINI_EMBEDDING_MODEL;
+      } else {
+        process.env.GEMINI_EMBEDDING_MODEL = previousModel;
+      }
+      if (previousDimensions === undefined) {
+        delete process.env.GEMINI_EMBEDDING_DIMENSIONS;
+      } else {
+        process.env.GEMINI_EMBEDDING_DIMENSIONS = previousDimensions;
+      }
+    }
+  });
+
   it("returns a warning state when validation has no knowledge chunks", async () => {
     const { geminiService } = await import("./gemini");
 

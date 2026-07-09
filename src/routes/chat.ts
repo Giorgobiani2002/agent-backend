@@ -11,6 +11,7 @@ import { asMetadata, sendError } from "../utils/http";
 import { getConversation } from "../repositories/chat";
 import { createChatAttachment } from "../repositories/chat-attachments";
 import { parsePayrollSpreadsheet } from "../utils/payroll-spreadsheet";
+import { parseWaybillSpreadsheet } from "../utils/waybill-spreadsheet";
 import { extractWaybillFromImage } from "../services/waybill-vision";
 
 const router = Router();
@@ -21,7 +22,7 @@ const spreadsheetUpload = multer({
   fileFilter: (_req, file, cb) => {
     const allowedName = /\.(xlsx|xlsm|csv)$/i.test(file.originalname);
     if (allowedName) cb(null, true);
-    else cb(new HttpError(400, "Only .xlsx, .xlsm and .csv payroll files are supported"));
+    else cb(new HttpError(400, "Only .xlsx, .xlsm and .csv spreadsheet files are supported"));
   },
 });
 const imageUpload = multer({
@@ -188,6 +189,54 @@ router.post(
 // chat turn reads `parsed_data`. The chat turn then builds the preview →
 // confirm "send to rs.ge" card from these stored fields.
 router.post(
+  "/conversations/:id/attachments/waybill-spreadsheet",
+  spreadsheetUpload.single("file"),
+  async (req: Request, res: Response) => {
+    let tempPath: string | undefined;
+    try {
+      if (!req.file) {
+        throw new HttpError(400, "Spreadsheet is required (field name: 'file')");
+      }
+      tempPath = req.file.path;
+      const conversation = await getConversation(req.companyId, req.params.id);
+      if (!conversation) throw new HttpError(404, "Conversation not found");
+      if (conversation.user_id && req.userId && conversation.user_id !== req.userId) {
+        throw new HttpError(403, "Conversation belongs to another user");
+      }
+
+      const parsed = await parseWaybillSpreadsheet(tempPath, req.file.originalname);
+      const status = parsed.drafts.length > 0 ? "parsed" : "rejected";
+      const attachment = await createChatAttachment({
+        companyId: req.companyId,
+        conversationId: req.params.id,
+        userId: req.userId,
+        originalName: req.file.originalname,
+        mimeType: req.file.mimetype || "application/octet-stream",
+        sizeBytes: req.file.size,
+        kind: "waybill_spreadsheet",
+        status,
+        parsedData: parsed as unknown as Record<string, unknown>,
+      });
+
+      res.status(201).json({
+        success: true,
+        attachment: {
+          id: attachment.id,
+          originalName: attachment.original_name,
+          status: attachment.status,
+          kind: attachment.kind,
+          parsed,
+        },
+      });
+    } catch (error) {
+      sendError(res, error);
+    } finally {
+      if (tempPath) await fs.unlink(tempPath).catch(() => {});
+    }
+  },
+);
+
+router.post(
   "/conversations/:id/attachments/image",
   imageUpload.single("file"),
   async (req: Request, res: Response) => {
@@ -254,6 +303,25 @@ router.post(
     try {
       const { snapshotHash } = req.body ?? {};
       const result = await chatService.confirmWaybillAction({
+        companyId: req.companyId,
+        conversationId: req.params.id,
+        userId: req.userId,
+        attachmentId: req.params.approvalId,
+        snapshotHash: typeof snapshotHash === "string" ? snapshotHash : undefined,
+      });
+      res.status(200).json({ success: true, result });
+    } catch (error) {
+      sendError(res, error);
+    }
+  },
+);
+
+router.post(
+  "/conversations/:id/waybill-spreadsheet-approvals/:approvalId/confirm",
+  async (req: Request, res: Response) => {
+    try {
+      const { snapshotHash } = req.body ?? {};
+      const result = await chatService.confirmWaybillSpreadsheetAction({
         companyId: req.companyId,
         conversationId: req.params.id,
         userId: req.userId,

@@ -1,6 +1,9 @@
 import { query } from "../db";
 
-export type ChatAttachmentKind = "payroll_spreadsheet" | "image";
+export type ChatAttachmentKind =
+  | "payroll_spreadsheet"
+  | "image"
+  | "waybill_spreadsheet";
 export type ChatAttachmentStatus = "parsed" | "rejected" | "sent";
 
 export interface ChatAttachmentRow {
@@ -106,6 +109,46 @@ export async function getChatAttachmentById(input: {
   return result.rows[0] ?? null;
 }
 
+export async function getLatestParsedAttachment(input: {
+  companyId: string;
+  conversationId: string;
+  kind: ChatAttachmentKind;
+  userId?: string;
+}): Promise<ChatAttachmentRow | null> {
+  const result = await query<ChatAttachmentRow>(
+    `
+      SELECT *
+      FROM chat_attachments
+      WHERE company_id = $1
+        AND conversation_id = $2
+        AND kind = $3
+        AND status = 'parsed'
+        AND ($4::text IS NULL OR user_id = $4)
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [input.companyId, input.conversationId, input.kind, input.userId ?? null],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function claimAttachmentForSend(input: {
+  companyId: string;
+  attachmentId: string;
+  kind: ChatAttachmentKind;
+}): Promise<ChatAttachmentRow | null> {
+  const result = await query<ChatAttachmentRow>(
+    `
+      UPDATE chat_attachments
+      SET status = 'sent'
+      WHERE company_id = $1 AND id = $2::uuid AND kind = $3 AND status = 'parsed'
+      RETURNING *
+    `,
+    [input.companyId, input.attachmentId, input.kind],
+  );
+  return result.rows[0] ?? null;
+}
+
 /**
  * Atomically claim an image attachment for sending: flip 'parsed' → 'sent' in
  * one statement and return the row only if THIS call won the race. A second
@@ -117,16 +160,7 @@ export async function claimImageAttachmentForSend(input: {
   companyId: string;
   attachmentId: string;
 }): Promise<ChatAttachmentRow | null> {
-  const result = await query<ChatAttachmentRow>(
-    `
-      UPDATE chat_attachments
-      SET status = 'sent'
-      WHERE company_id = $1 AND id = $2::uuid AND kind = 'image' AND status = 'parsed'
-      RETURNING *
-    `,
-    [input.companyId, input.attachmentId],
-  );
-  return result.rows[0] ?? null;
+  return claimAttachmentForSend({ ...input, kind: "image" });
 }
 
 /**
@@ -153,6 +187,30 @@ export async function markChatAttachmentStatus(input: {
       input.attachmentId,
       input.status,
       JSON.stringify(input.mergeParsedData ?? {}),
+    ],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function updateChatAttachmentParsedData(input: {
+  companyId: string;
+  attachmentId: string;
+  parsedData: Record<string, unknown>;
+  status?: ChatAttachmentStatus;
+}): Promise<ChatAttachmentRow | null> {
+  const result = await query<ChatAttachmentRow>(
+    `
+      UPDATE chat_attachments
+      SET parsed_data = $3::jsonb,
+          status = COALESCE($4::text, status)
+      WHERE company_id = $1 AND id = $2::uuid
+      RETURNING *
+    `,
+    [
+      input.companyId,
+      input.attachmentId,
+      JSON.stringify(input.parsedData),
+      input.status ?? null,
     ],
   );
   return result.rows[0] ?? null;

@@ -40,21 +40,34 @@ export function getVertexCredentials(): ServiceAccountCredentials | undefined {
 }
 
 /**
- * Returns the shared GoogleGenAI client in **Gemini API (apiKey) mode**.
+ * Returns the shared GoogleGenAI client in Vertex AI / Gemini Enterprise mode.
  *
- * Billing routes through the Gemini API SKU, which the $1,000 GenAI App Builder
- * credit covers — unlike `vertexai: true`, which bills as "Vertex AI" (not
- * covered). The function name is kept for call-site compatibility.
+ * All Declario AI model calls should route through this client so embeddings,
+ * chat, vision, STT, TTS, and playbook extraction bill to the configured
+ * Google Cloud project instead of the AI Studio Gemini API-key SKU.
  */
 export function getVertexClient(): GoogleGenAI {
   if (!client) {
-    if (!config.geminiApiKey) {
+    if (!config.gcpProjectId || !config.gcpLocation) {
       throw new HttpError(
         500,
-        "GEMINI_API_KEY is not set — required for Gemini API access",
+        "GCP_PROJECT_ID and GCP_LOCATION are required for Vertex AI Gemini access",
       );
     }
-    client = new GoogleGenAI({ apiKey: config.geminiApiKey });
+    const credentials = getVertexCredentials();
+    client = new GoogleGenAI({
+      enterprise: true,
+      project: config.gcpProjectId,
+      location: config.gcpLocation,
+      ...(credentials
+        ? {
+            googleAuthOptions: {
+              credentials,
+              scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+            },
+          }
+        : {}),
+    });
   }
   return client;
 }
