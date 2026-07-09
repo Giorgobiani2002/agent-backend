@@ -1,5 +1,6 @@
 const GEMINI_VERTEX_EMBEDDING_MODEL = "gemini-embedding-2";
 const DEFAULT_GEMINI_CHAT_MODEL = "gemini-3.5-flash";
+const DEFAULT_GEMINI_CHAT_FALLBACK_MODELS = ["gemini-3.1-pro-preview"];
 
 const LEGACY_VERTEX_EMBEDDING_MODELS: Record<string, string> = {
   // Keep the vector space stable for the existing vector(1536) corpus.
@@ -23,6 +24,7 @@ function envCsv(name: string): string[] {
 }
 
 const geminiChatModel = process.env.GEMINI_CHAT_MODEL ?? DEFAULT_GEMINI_CHAT_MODEL;
+const geminiChatFallbackModels = envCsv("GEMINI_CHAT_FALLBACK_MODELS");
 
 export const config = {
   openaiApiKey: process.env.OPENAI_API_KEY,
@@ -36,6 +38,10 @@ export const config = {
   // re-embedded in the same vector space.
   geminiEmbeddingModel: resolveGeminiEmbeddingModel(),
   geminiChatModel,
+  geminiChatFallbackModels:
+    geminiChatFallbackModels.length > 0
+      ? geminiChatFallbackModels
+      : DEFAULT_GEMINI_CHAT_FALLBACK_MODELS,
   geminiPlaybookModel: process.env.GEMINI_PLAYBOOK_MODEL ?? DEFAULT_GEMINI_CHAT_MODEL,
   geminiVisionModel: process.env.GEMINI_VISION_MODEL ?? geminiChatModel,
   geminiVisionFallbackModels: envCsv("GEMINI_VISION_FALLBACK_MODELS"),

@@ -125,6 +125,46 @@ describe("waybill vision", () => {
     expect(calledModels).toEqual(["current-model", "current-model", "current-model"]);
   });
 
+  it("tries the fallback model after exhausting temporary errors on the primary model", async () => {
+    setEnv("GEMINI_VISION_MODEL", "busy-model");
+    setEnv("GEMINI_VISION_FALLBACK_MODELS", "pro-model");
+    setEnv("GEMINI_VISION_MAX_ATTEMPTS", "2");
+    setEnv("GEMINI_CHAT_MODEL", "chat-model");
+
+    const generateContent = jest.fn(async ({ model }: { model: string }) => {
+      if (model === "busy-model") {
+        throw new Error("503 high demand");
+      }
+      return {
+        text: JSON.stringify({
+          is_waybill: true,
+          confidence: 0.8,
+          buyer_tin: "123456789",
+          items: [{ w_name: "Goods", quantity: 1, price: 10 }],
+          warnings: [],
+        }),
+      };
+    });
+
+    jest.spyOn(global, "setTimeout").mockImplementation((cb: (_: void) => void) => {
+      cb(undefined as void);
+      return 0 as unknown as NodeJS.Timeout;
+    });
+    jest.doMock("./vertex", () => ({
+      getVertexClient: () => ({ models: { generateContent } }),
+    }));
+    jest.resetModules();
+
+    const { extractWaybillFromImage } = await import("./waybill-vision");
+    const result = await extractWaybillFromImage("aW1hZ2U=", "image/png");
+
+    expect(result.is_waybill).toBe(true);
+    const calledModels = (
+      generateContent.mock.calls as unknown as Array<[{ model: string }]>
+    ).map((call) => call[0].model);
+    expect(calledModels).toEqual(["busy-model", "busy-model", "pro-model"]);
+  });
+
   it("parses a JSON object even when the model wraps it in prose", async () => {
     setEnv("GEMINI_VISION_MODEL", "current-model");
     setEnv("GEMINI_VISION_FALLBACK_MODELS", "");

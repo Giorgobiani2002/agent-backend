@@ -87,6 +87,47 @@ async function withLlmRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
 }
 
 // ── Implement GeminiService interface ─────────────────────────────────────────
+function uniqueModels(models: Array<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const model of models) {
+    const trimmed = model?.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+export function geminiChatModelCandidates(): string[] {
+  return uniqueModels([
+    config.geminiChatModel,
+    ...config.geminiChatFallbackModels,
+  ]);
+}
+
+async function withLlmFallback<T>(
+  fn: (model: string) => Promise<T>,
+  attempts = 3,
+): Promise<{ response: T; model: string }> {
+  const models = geminiChatModelCandidates();
+  let lastError: unknown;
+
+  for (const model of models) {
+    try {
+      return {
+        response: await withLlmRetry(() => fn(model), attempts),
+        model,
+      };
+    } catch (error) {
+      lastError = error;
+      if (!isTransientLlmError(error)) throw error;
+    }
+  }
+
+  throw lastError;
+}
+
 export const geminiService: GeminiService = {
   // ── Embeddings ──
   async embed(text: string): Promise<number[]> {
@@ -104,9 +145,9 @@ export const geminiService: GeminiService = {
 
   // ── Chat ──
   async generateChatResponse(messages: Content[]): Promise<{ text: string; model: string }> {
-    const response = await withLlmRetry(() =>
+    const { response, model } = await withLlmFallback((model) =>
       getVertexClient().models.generateContent({
-        model: config.geminiChatModel,
+        model,
         contents: messages,
         config: {
           maxOutputTokens: config.geminiChatMaxOutputTokens,
@@ -116,7 +157,7 @@ export const geminiService: GeminiService = {
     );
     const text = response.text?.trim();
     if (!text) throw new Error("Vertex AI chat response returned empty text");
-    return { text, model: response.modelVersion ?? config.geminiChatModel };
+    return { text, model: response.modelVersion ?? model };
   },
 
   // ── Tool-calling ──
@@ -124,9 +165,9 @@ export const geminiService: GeminiService = {
     const modeMap: Record<string, string> = { any: "ANY", none: "NONE", auto: "AUTO" };
     const mode = modeMap[input.toolChoice ?? "auto"] ?? "AUTO";
 
-    const response = await withLlmRetry(() =>
+    const { response, model } = await withLlmFallback((model) =>
       getVertexClient().models.generateContent({
-        model: config.geminiChatModel,
+        model,
         contents: input.contents,
         config: {
           maxOutputTokens: input.maxOutputTokens ?? config.geminiChatMaxOutputTokens,
@@ -142,16 +183,16 @@ export const geminiService: GeminiService = {
     return {
       functionCalls,
       text: response.text?.trim() ?? "",
-      model: response.modelVersion ?? config.geminiChatModel,
+      model: response.modelVersion ?? model,
       modelContent: response.candidates?.[0]?.content,
     };
   },
 
   // ── Structured JSON ──
   async generateStructured(input): Promise<{ text: string; model: string }> {
-    const response = await withLlmRetry(() =>
+    const { response, model } = await withLlmFallback((model) =>
       getVertexClient().models.generateContent({
-        model: config.geminiChatModel,
+        model,
         contents: [
           { role: "user", parts: [{ text: input.systemPrompt }] },
           { role: "user", parts: [{ text: input.userText }] },
@@ -166,7 +207,7 @@ export const geminiService: GeminiService = {
     );
     const text = response.text?.trim();
     if (!text) throw new Error("Vertex AI structured response returned empty text");
-    return { text, model: response.modelVersion ?? config.geminiChatModel };
+    return { text, model: response.modelVersion ?? model };
   },
 
   // ── Data validation ──
@@ -215,11 +256,13 @@ export const geminiService: GeminiService = {
 
     let text = "";
     try {
-      const response = await getVertexClient().models.generateContent({
-        model: config.geminiChatModel,
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        config: { maxOutputTokens: 4096, temperature: 0, responseMimeType: "application/json" },
-      });
+      const { response } = await withLlmFallback((model) =>
+        getVertexClient().models.generateContent({
+          model,
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          config: { maxOutputTokens: 4096, temperature: 0, responseMimeType: "application/json" },
+        }),
+      );
       text = response.text?.trim() ?? "";
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);

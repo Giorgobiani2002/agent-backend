@@ -238,7 +238,9 @@ export async function extractWaybillFromImage(
   let text = "";
   let usedModel = "";
 
-  for (const model of models) {
+  for (let modelIndex = 0; modelIndex < models.length; modelIndex += 1) {
+    const model = models[modelIndex];
+    const isLastModel = modelIndex === models.length - 1;
     usedModel = model;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
@@ -264,10 +266,14 @@ export async function extractWaybillFromImage(
       } catch (error) {
         lastError = error;
         if (modelUnavailable(error)) break;
-        if (!retryable(error) || attempt === maxAttempts - 1) {
+        if (retryable(error) && attempt < maxAttempts - 1) {
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)));
+          continue;
+        }
+        if (retryable(error) && !isLastModel) break;
+        if (!retryable(error) || isLastModel) {
           throw new HttpError(502, `Gemini vision failed: ${upstreamMessage(error)}`);
         }
-        await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)));
       }
     }
     if (text) break;
