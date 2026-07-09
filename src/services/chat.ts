@@ -67,7 +67,8 @@ const RAG_CONTEXT_PREVIEW_CHARS = 400;
 const VOICE_MAX_OUTPUT_TOKENS = 240;
 const DOMAIN_GUARD_MODEL = "declario-domain-guard-v1";
 const DOMAIN_GUARD_INSTRUCTION = [
-  "Scope policy: declario only helps with finance, accounting, bookkeeping, taxes, payroll, VAT, profit tax, invoices, waybills, bank statements, declarations, rs.ge, business operations data, uploaded financial documents/spreadsheets, and Declario product workflows.",
+  "Scope policy: declario helps with finance, accounting, bookkeeping, taxes, payroll, VAT, profit tax, income tax, small entrepreneur / small business tax, invoices, waybills, bank statements, declarations, rs.ge, business operations data, uploaded financial documents/spreadsheets, and Declario product workflows.",
+  "Treat plausible Georgian business/tax wording as in-scope even when it is informal or incomplete, e.g. საშემოსავლო, მცირე მეწარმე, ბრუნვა, დეკლარაციის შევსება, rs-ზე გაგზავნა, ზედნადები, ფაქტურა, ხელფასი, დღგ.",
   "If the user asks about politics, public figures, entertainment, gossip, culture-war/provocative topics, general trivia, medical, legal matters outside tax/accounting, coding, or any other off-topic subject, do not answer the substance. Briefly say you can help with finance/accounting/tax/rs.ge topics and ask them to reframe it in that context.",
   "Do not debate or analyze Georgian politicians or public figures unless the question is directly about a finance, tax, accounting, payroll, compliance, or business-record issue.",
 ].join(" ");
@@ -139,7 +140,22 @@ function isGreetingOrCapabilityQuestion(text: string): boolean {
 function isInScopeChatTopic(text: string): boolean {
   if (isGreetingOrCapabilityQuestion(text)) return true;
   if (looksLikeWaybillCorrection(text)) return true;
-  return /(declario|rs\.?ge|revenue service|შემოსავლების|ფინანს|ბუღალტ|account|accounting|bookkeep|finance|financial|tax|vat|დღგ|profit tax|მოგების|გადასახად|declaration|დეკლარაცი|invoice|ფაქტურ|waybill|ზედნადებ|payroll|salary|ხელფას|employee|თანამშრომ|pension|პენსი|bank|ბანკ|statement|ამონაწერ|order|შეკვეთ|shopify|integration|ინტეგრაცი|დაკავშირ|კავშირ|pipeline|bulk|upload|ატვირთ|file|submit|rs-|(^|\s)რს(\s|$)|საგადასახადო|საფინანსო|კომპანი|business|ბიზნეს|cash|revenue|expense|income|cost|ფას|რაოდენ|მისამართ|მყიდველ|asset|აქტივ|ledger|journal|balance|trial balance|excel|spreadsheet|xlsx|csv|დოკუმენტ|document|receipt|ჩეკ|audit|compliance|კომპლაიანს|ზედმეტობა|დავალიან|ვალდებულ)/i.test(
+  const directTopic =
+    /(declario|rs\.?ge|revenue service|შემოსავლების|ფინანს|ბუღალტ|account|accounting|bookkeep|finance|financial|tax|vat|დღგ|profit tax|income tax|small business|small taxpayer|turnover|მცირე\s*მეწარმ|მეწარმ|ინდ\.?\s*მეწარმ|ინდივიდუალურ|საშემოსავლ|მოგების|ქონების გადასახად|აქციზ|იმპორტ|ექსპორტ|ბრუნვ|შემოსავალ|ამონაგებ|ხარჯ|დასაბეგრ|გადამხდელ|განაკვ|გადასახად|declaration|დეკლარაცი|invoice|ფაქტურ|waybill|ზედნადებ|payroll|salary|ხელფას|employee|თანამშრომ|pension|პენსი|bank|ბანკ|statement|ამონაწერ|order|შეკვეთ|shopify|integration|ინტეგრაცი|დაკავშირ|კავშირ|pipeline|bulk|upload|ატვირთ|file|submit|rs-|(^|\s)რს(\s|$)|საგადასახადო|საფინანსო|კომპანი|business|ბიზნეს|cash|revenue|expense|income|cost|ფას|რაოდენ|მისამართ|მყიდველ|asset|აქტივ|ledger|journal|balance|trial balance|excel|spreadsheet|xlsx|csv|დოკუმენტ|document|receipt|ჩეკ|audit|compliance|კომპლაიანს|ზედმეტობა|დავალიან|ვალდებულ)/i.test(
+      text,
+    );
+  const formFillingIntent =
+    /(შევავს|შევს|დაფაილ|დააფიქს|გააგზავ|file|fill|submit).{0,60}(დეკლარაცი|საშემოსავლ|დღგ|vat|გადასახად|rs\.?ge|(^|\s)რს(\s|$)|ფორმ)|(?:დეკლარაცი|საშემოსავლ|დღგ|vat|გადასახად|rs\.?ge|(^|\s)რს(\s|$)|ფორმ).{0,60}(შევავს|შევს|დაფაილ|დააფიქს|გააგზავ|file|fill|submit)/i.test(
+      text,
+    );
+  return directTopic || formFillingIntent;
+}
+
+function isClearlyOffTopicChat(text: string): boolean {
+  if (isGreetingOrCapabilityQuestion(text) || isInScopeChatTopic(text)) {
+    return false;
+  }
+  return /(სააკაშვილ|ივანიშვილ|კობახიძ|ზურაბიშვილ|ტრამპ|ბაიდენ|პუტინ|პოლიტიკ|არჩევნ|მთავრობ|პარტი|რელიგი|გოსიპ|ჭორი|მსახიობ|მომღერალ|ფილმ|სერიალ|სიმღერ|ლექს|თამაში|სპორტ|ფეხბურთ|კალათბურთ|ამინდ|რეცეპტ|საჭმელ|ხაჭაპურ|მწვად|ექიმ|მედიცინ|დიაგნოზ|წამალ|javascript|python|react|კოდ|პროგრამირ|code|programming|celebrity|movie|music|lyrics|recipe|cook|weather|sports|medical|doctor|diagnosis)/i.test(
     text,
   );
 }
@@ -174,6 +190,7 @@ function waybillPhotoHelpReply(): string {
 
 function domainGuardReply(text: string, voiceMode: boolean): string | null {
   if (isInScopeChatTopic(text)) return null;
+  if (!isClearlyOffTopicChat(text)) return null;
   if (voiceMode) {
     return "ამ თემაზე ვერ გიპასუხებთ. დამისვით კითხვა ფინანსებზე, ბუღალტერიაზე, გადასახადებზე, rs.ge-ზე ან Declario-ს მონაცემებზე.";
   }

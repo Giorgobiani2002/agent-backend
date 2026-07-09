@@ -333,6 +333,28 @@ describe("chat service", () => {
     );
   });
 
+  it("allows small entrepreneur income-tax filing questions", async () => {
+    await sendConversationMessage(
+      {
+        companyId: TEST_COMPANY_ID,
+        conversationId: "conversation-1",
+        content: "საშემოსავლო როგორ შევავსო მცირე მეწარმის?",
+        metadata: {},
+      },
+      gemini,
+    );
+
+    expect(gemini.generateWithTools).toHaveBeenCalled();
+    expect(chatRepository.persistChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantModel: "gemini-3.1-flash-lite-preview",
+        assistantMetadata: expect.not.objectContaining({
+          domainGuard: expect.objectContaining({ blocked: true }),
+        }),
+      }),
+    );
+  });
+
   it("allows Georgian shorthand questions about RS.ge connection status", async () => {
     await sendConversationMessage(
       {
