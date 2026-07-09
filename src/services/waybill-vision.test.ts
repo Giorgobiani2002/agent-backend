@@ -74,6 +74,72 @@ describe("waybill vision", () => {
     ]);
   });
 
+  it("recovers a truncated JSON response (missing closing brace) from the model", async () => {
+    setEnv("GEMINI_VISION_MODEL", "vision-model");
+    setEnv("GEMINI_VISION_FALLBACK_MODELS", "");
+    setEnv("GEMINI_CHAT_MODEL", "chat-model");
+
+    // Gemini intermittently cuts the JSON off before the final `}` — the data
+    // is all there, only the closing brace is missing. The extraction must not
+    // be discarded (which would tell the user "upload a clearer photo").
+    const truncated =
+      '{\n "is_waybill": true,\n "confidence": 0.99,\n "waybill_type": 3,\n' +
+      ' "buyer_name": "Test Buyer LLC",\n "buyer_tin": "123456789",\n' +
+      ' "start_address": "Tbilisi, Test Street 1",\n "end_address": "Tbilisi, Test Street 2",\n' +
+      ' "items": [\n  { "w_name": "Test Goods A", "unit_txt": "pcs", "quantity": 2, "price": 15.5 },\n' +
+      '  { "w_name": "Test Goods B", "unit_txt": "kg", "quantity": 3, "price": 8 }\n ],\n "warnings": []';
+
+    const generateContent = jest.fn(async () => ({ text: truncated }));
+    jest.doMock("./vertex", () => ({
+      getVertexClient: () => ({ models: { generateContent } }),
+    }));
+    jest.resetModules();
+
+    const { extractWaybillFromImage } = await import("./waybill-vision");
+    const result = await extractWaybillFromImage("aW1hZ2U=", "image/png");
+
+    expect(result.is_waybill).toBe(true);
+    expect(result.buyer_tin).toBe("123456789");
+    expect(result.items).toHaveLength(2);
+    expect(result.items[1]).toEqual(
+      expect.objectContaining({ w_name: "Test Goods B", quantity: 3, price: 8 }),
+    );
+  });
+
+  it("retries when the model returns unparseable text, then succeeds", async () => {
+    setEnv("GEMINI_VISION_MODEL", "vision-model");
+    setEnv("GEMINI_VISION_FALLBACK_MODELS", "");
+    setEnv("GEMINI_VISION_MAX_ATTEMPTS", "3");
+    setEnv("GEMINI_CHAT_MODEL", "chat-model");
+
+    let call = 0;
+    const generateContent = jest.fn(async () => {
+      call += 1;
+      if (call === 1) return { text: "sorry, I could not read this image" };
+      return {
+        text: JSON.stringify({
+          is_waybill: true,
+          confidence: 0.9,
+          buyer_tin: "123456789",
+          items: [{ w_name: "Goods", unit_txt: "pcs", quantity: 1, price: 5 }],
+          warnings: [],
+        }),
+      };
+    });
+
+    jest.doMock("./vertex", () => ({
+      getVertexClient: () => ({ models: { generateContent } }),
+    }));
+    jest.resetModules();
+
+    const { extractWaybillFromImage } = await import("./waybill-vision");
+    const result = await extractWaybillFromImage("aW1hZ2U=", "image/png");
+
+    expect(result.is_waybill).toBe(true);
+    expect(result.buyer_tin).toBe("123456789");
+    expect(generateContent).toHaveBeenCalledTimes(2);
+  });
+
   it("uses current chat/pro models for vision by default without legacy fallbacks", async () => {
     delete process.env.GEMINI_VISION_MODEL;
     delete process.env.GEMINI_VISION_FALLBACK_MODELS;

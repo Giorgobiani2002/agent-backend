@@ -91,6 +91,37 @@ function stripFences(text: string): string {
     .trim();
 }
 
+// Close an object/array that the model cut off before its final `}`/`]`.
+// Gemini intermittently truncates the JSON tail; the data is all there, so we
+// balance the open brackets rather than discard the whole extraction.
+function repairTruncatedJson(text: string): string | null {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (const ch of text) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inString) {
+      if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{" || ch === "[") stack.push(ch);
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  if (!inString && stack.length === 0) return null; // already balanced
+  let repaired = text;
+  if (inString) repaired += '"';
+  repaired = repaired.replace(/,\s*$/, "");
+  for (let i = stack.length - 1; i >= 0; i -= 1) {
+    repaired += stack[i] === "{" ? "}" : "]";
+  }
+  return repaired;
+}
+
 function parseJsonObject(text: string): Record<string, unknown> | null {
   const cleaned = stripFences(text);
   const candidates = [cleaned];
@@ -98,6 +129,10 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
   const lastBrace = cleaned.lastIndexOf("}");
   if (firstBrace >= 0 && lastBrace > firstBrace) {
     candidates.push(cleaned.slice(firstBrace, lastBrace + 1));
+  }
+  if (firstBrace >= 0) {
+    const repaired = repairTruncatedJson(cleaned.slice(firstBrace));
+    if (repaired) candidates.push(repaired);
   }
 
   for (const candidate of candidates) {
@@ -280,8 +315,19 @@ export async function extractWaybillFromImage(
             responseMimeType: "application/json",
           },
         });
-        text = response.text?.trim() ?? "";
-        if (text) break;
+        const raw = response.text?.trim() ?? "";
+        if (raw) {
+          text = raw;
+          const obj = parseJsonObject(raw);
+          if (obj) return normalizeExtraction(obj);
+          // Non-empty but unparseable — the model truncated the JSON beyond what
+          // repairTruncatedJson can salvage. A fresh generation almost always
+          // comes back clean, so retry instead of discarding a valid upload.
+          if (attempt < maxAttempts - 1) {
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)));
+            continue;
+          }
+        }
       } catch (error) {
         lastError = error;
         if (modelUnavailable(error)) break;
@@ -295,7 +341,6 @@ export async function extractWaybillFromImage(
         }
       }
     }
-    if (text) break;
   }
 
   if (!text) {
@@ -305,21 +350,16 @@ export async function extractWaybillFromImage(
     );
   }
 
-  let parsed: Record<string, unknown>;
-  const obj = parseJsonObject(text);
-  if (!obj) {
-    return {
-      is_waybill: false,
-      confidence: 0,
-      items: [],
-      warnings: [
-        "ფოტოდან მონაცემების ამოღება ვერ მოხერხდა — სცადეთ უფრო მკაფიო/სწორი სურათი.",
-      ],
-    };
-  }
-  parsed = obj;
-
-  return normalizeExtraction(parsed);
+  // Non-empty responses that never parsed across every model+attempt — tell the
+  // user to retry with a clearer photo rather than crashing.
+  return {
+    is_waybill: false,
+    confidence: 0,
+    items: [],
+    warnings: [
+      "ფოტოდან მონაცემების ამოღება ვერ მოხერხდა — სცადეთ უფრო მკაფიო/სწორი სურათი.",
+    ],
+  };
 }
 
 /**
