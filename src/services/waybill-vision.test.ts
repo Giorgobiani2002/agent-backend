@@ -207,6 +207,43 @@ describe("waybill vision", () => {
     expect(result.items).toHaveLength(1);
   });
 
+  it("keeps return and sub-waybill references from vision output", async () => {
+    setEnv("GEMINI_VISION_MODEL", "current-model");
+    setEnv("GEMINI_VISION_FALLBACK_MODELS", "");
+    setEnv("GEMINI_CHAT_MODEL", "current-model");
+
+    const generateContent = jest.fn(async () => ({
+      text: JSON.stringify({
+        is_waybill: true,
+        confidence: 0.91,
+        waybill_type: 6,
+        waybill_type_label: "sub-waybill",
+        buyer_name: "Test Buyer LLC",
+        buyer_tin: "123456789",
+        waybill_number: "WB-ORIGINAL",
+        sub_waybill_numbers: ["WB-1", "WB-2"],
+        items: [{ w_name: "Test Goods", unit_txt: "pcs", quantity: 2, price: 5 }],
+        warnings: [],
+      }),
+    }));
+
+    jest.doMock("./vertex", () => ({
+      getVertexClient: () => ({ models: { generateContent } }),
+    }));
+    jest.resetModules();
+
+    const { extractWaybillFromImage } = await import("./waybill-vision");
+    const result = await extractWaybillFromImage("aW1hZ2U=", "image/png");
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        waybill_type: 6,
+        waybill_number: "WB-ORIGINAL",
+        sub_waybill_numbers: ["WB-1", "WB-2"],
+      }),
+    );
+  });
+
   it("returns a 502 error when every configured vision model is unavailable", async () => {
     setEnv("GEMINI_VISION_MODEL", "denied-model");
     setEnv("GEMINI_VISION_FALLBACK_MODELS", "");

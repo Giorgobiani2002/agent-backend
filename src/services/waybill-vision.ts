@@ -38,6 +38,8 @@ export interface WaybillExtraction {
   driver_tin?: string;
   car_number?: string;
   document_number?: string;
+  waybill_number?: string;
+  sub_waybill_numbers?: string[];
   begin_date?: string;
   items: WaybillItemFields[];
   warnings: string[];
@@ -64,6 +66,8 @@ const EXTRACTION_PROMPT = [
   '  "driver_tin": string|null,       // driver identification number',
   '  "car_number": string|null,       // ავტომობილის ნომერი',
   '  "document_number": string|null,  // ზედნადების ნომერი, if already printed on the doc',
+  '  "waybill_number": string|null,   // source/original/parent waybill number required for return waybills, if visible',
+  '  "sub_waybill_numbers": string[], // linked waybill numbers for sub-waybills, if visible',
   '  "begin_date": string|null,       // shipment date as ISO YYYY-MM-DD if visible',
   '  "items": [                       // line items / goods rows',
   '    { "w_name": string, "unit_txt": string|null, "quantity": number, "price": number }',
@@ -123,6 +127,19 @@ function toStringOrUndefined(value: unknown): string | undefined {
   if (value == null) return undefined;
   const s = String(value).trim();
   return s ? s : undefined;
+}
+
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry).trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(/[,\n;|]+/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+  return [];
 }
 
 function normalizeItems(raw: unknown): WaybillItemFields[] {
@@ -216,6 +233,8 @@ function normalizeExtraction(parsed: Record<string, unknown>): WaybillExtraction
     driver_tin: toStringOrUndefined(parsed.driver_tin),
     car_number: toStringOrUndefined(parsed.car_number),
     document_number: toStringOrUndefined(parsed.document_number),
+    waybill_number: toStringOrUndefined(parsed.waybill_number),
+    sub_waybill_numbers: toStringArray(parsed.sub_waybill_numbers),
     begin_date: toStringOrUndefined(parsed.begin_date),
     items,
     warnings,
@@ -320,7 +339,7 @@ export async function applyWaybillCorrection(
     "If the user's message is NOT about changing this waybill (a question, chit-chat, or unrelated request), return the data UNCHANGED with changed=false.",
     "",
     "Return JSON ONLY in this shape (no markdown):",
-    '{ "changed": boolean, "waybill": { "is_waybill": boolean, "confidence": number, "waybill_type": number|null, "waybill_type_label": string|null, "seller_name": string|null, "seller_tin": string|null, "buyer_name": string|null, "buyer_tin": string|null, "start_address": string|null, "end_address": string|null, "driver_name": string|null, "driver_tin": string|null, "car_number": string|null, "document_number": string|null, "begin_date": string|null, "items": [{"w_name": string, "unit_txt": string|null, "quantity": number, "price": number}], "warnings": string[] } }',
+    '{ "changed": boolean, "waybill": { "is_waybill": boolean, "confidence": number, "waybill_type": number|null, "waybill_type_label": string|null, "seller_name": string|null, "seller_tin": string|null, "buyer_name": string|null, "buyer_tin": string|null, "start_address": string|null, "end_address": string|null, "driver_name": string|null, "driver_tin": string|null, "car_number": string|null, "document_number": string|null, "waybill_number": string|null, "sub_waybill_numbers": string[], "begin_date": string|null, "items": [{"w_name": string, "unit_txt": string|null, "quantity": number, "price": number}], "warnings": string[] } }',
     "Rules: quantity and price are plain numbers; price is per-unit. Keep Georgian text as-is. Preserve every field the user did NOT mention.",
     "",
     "CURRENT DATA:",

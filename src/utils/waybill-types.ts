@@ -30,6 +30,9 @@ export function waybillTypeLabelKa(type: number | undefined): string {
 
 export function inferWaybillTypeFromText(text: string): number | undefined {
   const normalized = text.toLowerCase();
+  if (/sub[\s-]*waybill|child\s*waybill|\u10e5\u10d5\u10d4\s*[-\u2013\u2014]?\s*\u10d6\u10d4\u10d3\u10dc\u10d0\u10d3\u10d4\u10d1/.test(normalized)) {
+    return WAYBILL_TYPES.subWaybill;
+  }
   if (/უკან\s*დაბრუნ|დაბრუნებ|return/.test(normalized)) return WAYBILL_TYPES.return;
   if (/დისტრიბუც|distribution/.test(normalized)) return WAYBILL_TYPES.distribution;
   if (/ტრანსპორტირების\s*გარეშე|without\s*transport/.test(normalized)) {
@@ -42,6 +45,9 @@ export function inferWaybillTypeFromText(text: string): number | undefined {
 
 export interface WaybillValidationInput {
   type?: number;
+  waybill_number?: string;
+  sub_waybill_numbers?: string[];
+  sub_waybills?: Array<{ waybill_number?: string }>;
   buyer_tin?: string;
   buyer_name?: string;
   start_address?: string;
@@ -70,6 +76,16 @@ export function validateWaybillForRs(input: WaybillValidationInput): string[] {
   }
   if (needsTransport && !input.driver_name) {
     errors.push(`${waybillTypeLabelKa(type)} ტიპისთვის მძღოლის სახელი გადაამოწმეთ/შეავსეთ.`);
+  }
+  if (type === WAYBILL_TYPES.return && !input.waybill_number) {
+    errors.push("უკან დაბრუნების ზედნადებისთვის საწყისი/დასაბრუნებელი ზედნადების ნომერი აუცილებელია.");
+  }
+  const subWaybillRefs = [
+    ...(input.sub_waybill_numbers ?? []),
+    ...(input.sub_waybills ?? []).map((sub) => sub.waybill_number ?? ""),
+  ].filter((value) => value.trim());
+  if (type === WAYBILL_TYPES.subWaybill && subWaybillRefs.length === 0) {
+    errors.push("ქვე-ზედნადებისთვის დაკავშირებული ზედნადების ნომერი აუცილებელია.");
   }
   if (!input.items.length) errors.push("მინიმუმ ერთი საქონლის პოზიცია აუცილებელია.");
   input.items.forEach((item, index) => {

@@ -629,4 +629,57 @@ describe("chat service", () => {
     );
     expect(gemini.embed).not.toHaveBeenCalled();
   });
+
+  it("offers the send button for an internal-transfer (type 1) photo with no buyer TIN", async () => {
+    const attachment: attachmentRepository.ChatAttachmentRow = {
+      id: "22222222-2222-2222-2222-222222222222",
+      company_id: TEST_COMPANY_ID,
+      conversation_id: "conversation-1",
+      user_id: "user-1",
+      original_name: "internal.jpg",
+      mime_type: "image/jpeg",
+      kind: "image",
+      size_bytes: 100,
+      status: "parsed",
+      created_at: "now",
+      parsed_data: {
+        is_waybill: true,
+        confidence: 0.9,
+        waybill_type: 1,
+        buyer_name: "",
+        buyer_tin: "",
+        start_address: "Warehouse A",
+        end_address: "Warehouse B",
+        car_number: "AA111AA",
+        driver_name: "Driver",
+        items: [{ w_name: "Box", quantity: 3, price: 4 }],
+        warnings: [],
+      },
+    };
+    jest.spyOn(attachmentRepository, "getChatAttachments").mockResolvedValue([attachment]);
+
+    await sendConversationMessage(
+      {
+        companyId: TEST_COMPANY_ID,
+        conversationId: "conversation-1",
+        content: "ატვირთე ეს ზედნადები",
+        metadata: {},
+        userId: "user-1",
+        attachmentIds: [attachment.id],
+      },
+      gemini,
+    );
+
+    expect(chatRepository.persistChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantModel: "declario-waybill-vision-v1",
+        assistantMetadata: expect.objectContaining({
+          pendingAction: expect.objectContaining({
+            type: "waybill_send",
+            waybillType: 1,
+          }),
+        }),
+      }),
+    );
+  });
 });

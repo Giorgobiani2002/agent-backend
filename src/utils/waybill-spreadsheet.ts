@@ -12,6 +12,8 @@ export interface WaybillSpreadsheetDraft {
   reference: string;
   waybill_type?: number;
   waybill_type_label?: string;
+  waybill_number?: string;
+  sub_waybill_numbers?: string[];
   buyer_name?: string;
   buyer_tin?: string;
   start_address?: string;
@@ -69,6 +71,7 @@ const COLUMN_ALIASES = {
   waybill_type: [
     "waybill type",
     "type",
+    "waybill kind",
     "ზედნადების ტიპი",
     "ტიპი",
     "შიდა გადაზიდვა",
@@ -76,6 +79,34 @@ const COLUMN_ALIASES = {
     "ტრანსპორტირების გარეშე",
     "დისტრიბუცია",
     "უკან დაბრუნება",
+    "sub waybill",
+    "sub-waybill",
+    "child waybill",
+    "ქვე-ზედნადები",
+  ],
+  waybill_number: [
+    "parent waybill number",
+    "original waybill number",
+    "source waybill number",
+    "base waybill number",
+    "return waybill number",
+    "linked waybill number",
+    "rs waybill number",
+    "parent document number",
+    "original document number",
+    "საწყისი ზედნადების ნომერი",
+    "დაბრუნების ზედნადების ნომერი",
+  ],
+  sub_waybill_numbers: [
+    "sub waybill numbers",
+    "sub-waybill numbers",
+    "sub waybills",
+    "sub_waybills",
+    "child waybill numbers",
+    "linked sub waybills",
+    "included waybill numbers",
+    "ქვე-ზედნადებები",
+    "ქვე ზედნადებები",
   ],
   buyer_name: [
     "buyer",
@@ -193,6 +224,7 @@ function parseWaybillType(value: string): number | undefined {
   if (!text) return undefined;
   const n = Number(text);
   if (Number.isInteger(n) && n >= 1 && n <= 6) return n;
+  if (/sub[\s-]*waybill|child\s*waybill|\u10e5\u10d5\u10d4\s*[-\u2013\u2014]?\s*\u10d6\u10d4\u10d3\u10dc\u10d0\u10d3\u10d4\u10d1/.test(text)) return 6;
   if (/უკან\s*დაბრუნ|დაბრუნებ|return/.test(text)) return 5;
   if (/დისტრიბუც|distribution/.test(text)) return 4;
   if (/ტრანსპორტირების\s*გარეშე|without\s*transport/.test(text)) return 3;
@@ -267,6 +299,13 @@ function normalizeTinText(value: string): string {
   const digits = value.replace(/[^\d]/g, "");
   if (digits.length > 0 && digits.length < 9) return digits.padStart(9, "0");
   return digits;
+}
+
+function parseStringList(value: string): string[] {
+  return value
+    .split(/[,\n;|]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
 }
 
 function aliasFieldForHeader(header: string): WaybillColumn | null {
@@ -347,17 +386,22 @@ function valueAt(
   return column ? excelCellText(row.getCell(column)).trim() : "";
 }
 
+type StringDraftField =
+  | "waybill_type_label"
+  | "waybill_number"
+  | "buyer_name"
+  | "buyer_tin"
+  | "start_address"
+  | "end_address"
+  | "driver_name"
+  | "driver_tin"
+  | "car_number"
+  | "document_number"
+  | "begin_date";
+
 function mergeDraftField(
   draft: WaybillSpreadsheetDraft,
-  field: keyof Omit<
-    WaybillSpreadsheetDraft,
-    | "reference"
-    | "waybill_type"
-    | "items"
-    | "source_rows"
-    | "total_amount"
-    | "warnings"
-  >,
+  field: StringDraftField,
   value: string,
   label: string,
 ): void {
@@ -370,11 +414,24 @@ function mergeDraftField(
   }
 }
 
+function mergeDraftStringList(
+  draft: WaybillSpreadsheetDraft,
+  field: "sub_waybill_numbers",
+  values: string[],
+): void {
+  if (!values.length) return;
+  const existing = new Set(draft[field] ?? []);
+  for (const value of values) existing.add(value);
+  draft[field] = Array.from(existing);
+}
+
 export function isSendableWaybillDraft(draft: WaybillSpreadsheetDraft): boolean {
+  const needsBuyer = draft.waybill_type !== 1;
   return Boolean(
-    draft.buyer_tin &&
-      /^\d{9}(\d{2})?$/.test(draft.buyer_tin) &&
-      draft.buyer_name &&
+    (!needsBuyer ||
+      (draft.buyer_tin &&
+        /^\d{9}(\d{2})?$/.test(draft.buyer_tin) &&
+        draft.buyer_name)) &&
       draft.start_address &&
       draft.end_address &&
       draft.items.length > 0 &&
@@ -402,12 +459,15 @@ export async function parseWaybillSpreadsheet(
   const header = findHeaderRow(sheet);
   const warnings: string[] = [];
   const rejectedRows: Array<{ row: number; reason: string }> = [];
-  const missingRequired = (["buyer_tin", "item_name", "quantity", "price"] as WaybillColumn[])
+  // buyer_tin is intentionally NOT required at the column level: internal
+  // transfers (type 1) legitimately have no buyer, and per-draft validation
+  // still flags a missing buyer TIN for the types that need one.
+  const missingRequired = (["item_name", "quantity", "price"] as WaybillColumn[])
     .filter((field) => !header.columnByField[field]);
 
   if (missingRequired.length > 0) {
     warnings.push(
-      `Required columns not found: ${missingRequired.join(", ")}. Add buyer TIN, item, quantity and price columns.`,
+      `Required columns not found: ${missingRequired.join(", ")}. Add item, quantity and price columns.`,
     );
     return {
       headers: header.headers,
@@ -440,6 +500,10 @@ export async function parseWaybillSpreadsheet(
     const buyerName = valueAt(row, header.columnByField, "buyer_name");
     const waybillTypeText = valueAt(row, header.columnByField, "waybill_type");
     const waybillType = parseWaybillType(waybillTypeText);
+    const waybillNumber = valueAt(row, header.columnByField, "waybill_number");
+    const subWaybillNumbers = parseStringList(
+      valueAt(row, header.columnByField, "sub_waybill_numbers"),
+    );
     const startAddress = valueAt(row, header.columnByField, "start_address");
     const endAddress = valueAt(row, header.columnByField, "end_address");
     const reference =
@@ -477,6 +541,8 @@ export async function parseWaybillSpreadsheet(
         reference: fallbackReference,
         waybill_type: waybillType,
         waybill_type_label: waybillTypeText || undefined,
+        waybill_number: waybillNumber || undefined,
+        sub_waybill_numbers: subWaybillNumbers.length ? subWaybillNumbers : undefined,
         buyer_name: buyerName || undefined,
         buyer_tin: buyerTin || undefined,
         start_address: startAddress || undefined,
@@ -497,6 +563,8 @@ export async function parseWaybillSpreadsheet(
     } else {
       mergeDraftField(draft, "buyer_name", buyerName, "Buyer name");
       mergeDraftField(draft, "buyer_tin", buyerTin, "Buyer TIN");
+      mergeDraftField(draft, "waybill_number", waybillNumber, "Waybill number");
+      mergeDraftStringList(draft, "sub_waybill_numbers", subWaybillNumbers);
       if (waybillType && !draft.waybill_type) {
         draft.waybill_type = waybillType;
         draft.waybill_type_label = waybillTypeText || undefined;
@@ -545,11 +613,18 @@ export async function parseWaybillSpreadsheet(
 
   const drafts = Array.from(draftsByKey.values()).map((draft) => {
     const draftWarnings = [...draft.warnings];
-    if (!draft.buyer_tin) draftWarnings.push("Buyer TIN is missing.");
-    else if (!/^\d{9}(\d{2})?$/.test(draft.buyer_tin)) {
+    const needsBuyer = draft.waybill_type !== 1;
+    if (needsBuyer && !draft.buyer_tin) draftWarnings.push("Buyer TIN is missing.");
+    else if (draft.buyer_tin && !/^\d{9}(\d{2})?$/.test(draft.buyer_tin)) {
       draftWarnings.push("Buyer TIN must contain 9 or 11 digits.");
     }
-    if (!draft.buyer_name) draftWarnings.push("Buyer name is missing.");
+    if (needsBuyer && !draft.buyer_name) draftWarnings.push("Buyer name is missing.");
+    if (draft.waybill_type === 5 && !draft.waybill_number) {
+      draftWarnings.push("Return waybill is missing the original/source waybill number.");
+    }
+    if (draft.waybill_type === 6 && !(draft.sub_waybill_numbers?.length)) {
+      draftWarnings.push("Sub-waybill is missing linked sub-waybill numbers.");
+    }
     if (!draft.start_address) draftWarnings.push("Start address is missing.");
     if (!draft.end_address) draftWarnings.push("End address is missing.");
     const total = draft.items.reduce((sum, item) => sum + item.quantity * item.price, 0);
