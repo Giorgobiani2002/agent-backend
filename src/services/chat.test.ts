@@ -574,6 +574,8 @@ describe("chat service", () => {
         buyer_tin: "123456789",
         start_address: "Tbilisi",
         end_address: "Batumi",
+        driver_name: "Driver",
+        car_number: "AA111AA",
         items: [{ w_name: "Coffee", quantity: 1, price: 12 }],
         warnings: [],
       },
@@ -585,6 +587,8 @@ describe("chat service", () => {
       buyer_tin: "123456789",
       start_address: "Tbilisi",
       end_address: "Batumi",
+      driver_name: "Driver",
+      car_number: "AA111AA",
       items: [{ w_name: "Coffee", quantity: 1, price: 21 }],
       warnings: [],
     };
@@ -681,5 +685,111 @@ describe("chat service", () => {
         }),
       }),
     );
+  });
+
+  it("does not offer the send button when a parsed photo is missing RS-required fields", async () => {
+    const attachment: attachmentRepository.ChatAttachmentRow = {
+      id: "33333333-3333-3333-3333-333333333333",
+      company_id: TEST_COMPANY_ID,
+      conversation_id: "conversation-1",
+      user_id: "user-1",
+      original_name: "return-waybill.jpg",
+      mime_type: "image/jpeg",
+      kind: "image",
+      size_bytes: 100,
+      status: "parsed",
+      created_at: "now",
+      parsed_data: {
+        is_waybill: true,
+        confidence: 0.88,
+        waybill_type: 5,
+        buyer_name: "Buyer LLC",
+        buyer_tin: "123456789",
+        start_address: "Batumi",
+        end_address: "Tbilisi",
+        car_number: "AA111AA",
+        driver_name: "Driver",
+        items: [{ w_name: "Returned item", quantity: 1, price: 12 }],
+        warnings: [],
+      },
+    };
+    jest.spyOn(attachmentRepository, "getChatAttachments").mockResolvedValue([attachment]);
+
+    await sendConversationMessage(
+      {
+        companyId: TEST_COMPANY_ID,
+        conversationId: "conversation-1",
+        content: "ატვირთე ეს დაბრუნების ზედნადები",
+        metadata: {},
+        userId: "user-1",
+        attachmentIds: [attachment.id],
+      },
+      gemini,
+    );
+
+    const persisted = jest.mocked(chatRepository.persistChatTurn).mock.calls.at(-1)?.[0] as {
+      assistantContent: string;
+      assistantMetadata?: { pendingAction?: unknown };
+      assistantModel: string;
+    };
+    expect(persisted.assistantModel).toBe("declario-waybill-vision-v1");
+    expect(persisted.assistantMetadata?.pendingAction).toBeUndefined();
+    expect(persisted.assistantContent).toContain("სავალდებულო");
+    expect(persisted.assistantContent).toContain("საწყისი");
+  });
+
+  it("does not offer the spreadsheet send button when Excel drafts are missing required fields", async () => {
+    const attachment: attachmentRepository.ChatAttachmentRow = {
+      id: "44444444-4444-4444-4444-444444444444",
+      company_id: TEST_COMPANY_ID,
+      conversation_id: "conversation-1",
+      user_id: "user-1",
+      original_name: "bad-waybills.xlsx",
+      mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      kind: "waybill_spreadsheet",
+      size_bytes: 100,
+      status: "parsed",
+      created_at: "now",
+      parsed_data: {
+        drafts: [
+          {
+            reference: "WB-MISSING-1",
+            waybill_type: 2,
+            start_address: "Tbilisi",
+            end_address: "Batumi",
+            driver_name: "Driver",
+            car_number: "AA111AA",
+            items: [{ w_name: "Coffee", unit_txt: "kg", quantity: 2, price: 10 }],
+            total_amount: 20,
+            warnings: ["Buyer TIN is missing."],
+          },
+        ],
+        warnings: [],
+        rejectedRows: [],
+      },
+    };
+    jest.spyOn(attachmentRepository, "getChatAttachments").mockResolvedValue([attachment]);
+
+    await sendConversationMessage(
+      {
+        companyId: TEST_COMPANY_ID,
+        conversationId: "conversation-1",
+        content: "ატვირთე ზედნადებები ექსელიდან",
+        metadata: {},
+        userId: "user-1",
+        attachmentIds: [attachment.id],
+      },
+      gemini,
+    );
+
+    const persisted = jest.mocked(chatRepository.persistChatTurn).mock.calls.at(-1)?.[0] as {
+      assistantContent: string;
+      assistantMetadata?: { pendingAction?: unknown };
+      assistantModel: string;
+    };
+    expect(persisted.assistantModel).toBe("declario-waybill-spreadsheet-v1");
+    expect(persisted.assistantMetadata?.pendingAction).toBeUndefined();
+    expect(persisted.assistantContent).toContain("WB-MISSING-1");
+    expect(persisted.assistantContent).toContain("Buyer TIN");
   });
 });

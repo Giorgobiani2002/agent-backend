@@ -197,7 +197,7 @@ function normalizeItems(raw: unknown): WaybillItemFields[] {
 
 function retryable(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /429|500|502|503|504|high demand|unavailable|resource exhausted/i.test(
+  return /429|500|502|503|504|high demand|unavailable|resource exhausted|unexpected gaxios error|fetch failed|socket hang up|econnreset|timeout/i.test(
     message,
   );
 }

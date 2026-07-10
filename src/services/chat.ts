@@ -896,6 +896,20 @@ function buildWaybillWorkflowResult(imageAttachments: ChatAttachmentRow[]): {
     car_number: extraction.car_number,
     items: extraction.items,
   });
+  if (validationErrors.length > 0) {
+    return {
+      text: [
+        "ფოტოდან ზედნადები წავიკითხე, მაგრამ RS.ge-ზე გაგზავნამდე რამდენიმე სავალდებულო მონაცემი აკლია.",
+        "",
+        ...validationErrors.map((error) => `- ${error}`),
+        ...(extraction.warnings.length
+          ? ["", "დამატებით გასათვალისწინებელია:", ...extraction.warnings.map((warning) => `- ${warning}`)]
+          : []),
+        "",
+        "გაგზავნის ღილაკს ჯერ არ გაჩვენებთ, რომ შემთხვევით არასრული ზედნადები არ აიტვირთოს. შეგიძლიათ ატვირთოთ უფრო მკაფიო ფოტო ან მომწეროთ გამოტოვებული მონაცემები ჩატში, მაგალითად: \"საწყისი ზედნადების ნომერია ...\".",
+      ].join("\n"),
+    };
+  }
   warnings.push(...validationErrors);
   if (extraction.confidence > 0 && extraction.confidence < 0.6) {
     warnings.unshift("ამოკითხვის სანდოობა დაბალია — განსაკუთრებით ყურადღებით გადაამოწმეთ.");
