@@ -432,7 +432,8 @@ export function isSendableWaybillDraft(draft: WaybillSpreadsheetDraft): boolean 
       (draft.buyer_tin &&
         /^\d{9}(\d{2})?$/.test(draft.buyer_tin) &&
         draft.buyer_name)) &&
-      draft.start_address &&
+      // start_address may be omitted — rs-server fills it from the company's
+      // default_start_address/seller_address at send time. end_address stays required.
       draft.end_address &&
       draft.items.length > 0 &&
       draft.items.every((item) => item.w_name && item.quantity > 0 && item.price > 0),

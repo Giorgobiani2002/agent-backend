@@ -36,6 +36,16 @@ describe("waybill type helpers", () => {
     ).toEqual([]);
   });
 
+  it("does not require a start address (the company default fills it at send time)", () => {
+    expect(
+      validateWaybillForRs({ ...base, type: WAYBILL_TYPES.transportation, start_address: undefined }),
+    ).toEqual([]);
+    // end address still required — it is per-shipment, not a fixed company value
+    expect(
+      validateWaybillForRs({ ...base, type: WAYBILL_TYPES.transportation, end_address: undefined }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("ჩაბარების")]));
+  });
+
   it("does not require driver or car for without-transport waybills", () => {
     expect(
       validateWaybillForRs({

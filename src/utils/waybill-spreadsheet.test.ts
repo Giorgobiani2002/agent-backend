@@ -213,6 +213,23 @@ describe("parseWaybillSpreadsheet", () => {
     }
   });
 
+  it("treats a draft with no start address as sendable (company default fills it)", () => {
+    const draft = {
+      reference: "NO-START-1",
+      waybill_type: 2,
+      buyer_tin: "123456789",
+      buyer_name: "Buyer LLC",
+      end_address: "Batumi",
+      items: [{ w_name: "Coffee", quantity: 1, price: 10, source_row: 2 }],
+      source_rows: [2],
+      total_amount: 10,
+      warnings: [],
+    };
+    expect(isSendableWaybillDraft(draft as any)).toBe(true);
+    // end address still required
+    expect(isSendableWaybillDraft({ ...draft, end_address: undefined } as any)).toBe(false);
+  });
+
   it("accepts an internal-transfer sheet with no buyer column (type 1 needs no buyer)", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "declario-waybill-test-"));
     const file = path.join(dir, "internal.xlsx");

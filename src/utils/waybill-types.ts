@@ -69,7 +69,10 @@ export function validateWaybillForRs(input: WaybillValidationInput): string[] {
     errors.push("მყიდველის ს/კ აუცილებელია და უნდა იყოს 9 ან 11 ციფრი.");
   }
   if (needsBuyer && !input.buyer_name) errors.push("მყიდველის დასახელება აუცილებელია.");
-  if (!input.start_address) errors.push("გაგზავნის მისამართი აუცილებელია.");
+  // start_address is intentionally NOT required here: a company ships from one
+  // fixed location, so the sheet/photo usually omits it and rs-server fills it
+  // from the tenant's default_start_address (falling back to seller_address)
+  // at send time. end_address is per-shipment, so it stays required.
   if (!input.end_address) errors.push("ჩაბარების მისამართი აუცილებელია.");
   if (needsTransport && !input.car_number) {
     errors.push(`${waybillTypeLabelKa(type)} ტიპისთვის ავტომობილის ნომერი გადაამოწმეთ/შეავსეთ.`);
